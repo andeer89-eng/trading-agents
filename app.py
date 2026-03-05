@@ -223,15 +223,20 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
     for future in concurrent.futures.as_completed(futures):
         name, report, error = future.result()
         if error:
-            analyst_reports[name] = f"Error: {error}"
+            analyst_reports[name] = f"[Analysis unavailable — see error below]"
             status_placeholders[name].markdown(
                 f"{analyst_icons[name]} **{name}**\n\n❌ Failed"
             )
+            st.error(f"**{name} failed:** {error}")
         else:
             analyst_reports[name] = report
             status_placeholders[name].markdown(
                 f"{analyst_icons[name]} **{name}**\n\n✅ Complete"
             )
+
+if all(r.startswith("[Analysis unavailable") for r in analyst_reports.values()):
+    st.error("All analyst agents failed. Check the errors above — your API key may lack access to this model.")
+    st.stop()
 
 # Show analyst reports in tabs
 st.markdown("**Analyst Reports** (click to expand):")
@@ -253,18 +258,23 @@ bear_argument = ""
 
 for round_num in range(1, debate_rounds + 1):
     with st.status(f"🥊 Debate Round {round_num}/{debate_rounds}", expanded=False) as debate_status:
-        st.write("Bullish Researcher building case...")
-        bull_argument = run_bullish_researcher(
-            client, ticker_input, analyst_reports, bear_argument, round_num
-        )
-        st.write("✅ Bull case ready")
+        try:
+            st.write("Bullish Researcher building case...")
+            bull_argument = run_bullish_researcher(
+                client, ticker_input, analyst_reports, bear_argument, round_num
+            )
+            st.write("✅ Bull case ready")
 
-        st.write("Bearish Researcher countering...")
-        bear_argument = run_bearish_researcher(
-            client, ticker_input, analyst_reports, bull_argument, round_num
-        )
-        st.write("✅ Bear case ready")
-        debate_status.update(label=f"✅ Round {round_num} complete", state="complete")
+            st.write("Bearish Researcher countering...")
+            bear_argument = run_bearish_researcher(
+                client, ticker_input, analyst_reports, bull_argument, round_num
+            )
+            st.write("✅ Bear case ready")
+            debate_status.update(label=f"✅ Round {round_num} complete", state="complete")
+        except Exception as e:
+            debate_status.update(label=f"❌ Round {round_num} failed", state="error")
+            st.error(f"Researcher debate failed: {e}")
+            st.stop()
 
 col_bull, col_bear = st.columns(2)
 with col_bull:
@@ -281,10 +291,15 @@ st.divider()
 st.markdown("### Step 3 — Risk Assessment")
 
 with st.status("⚠️ Risk Manager assessing position risk...", expanded=False) as risk_status:
-    risk_report = run_risk_manager(
-        client, ticker_input, analyst_reports, bull_argument, bear_argument
-    )
-    risk_status.update(label="✅ Risk assessment complete", state="complete")
+    try:
+        risk_report = run_risk_manager(
+            client, ticker_input, analyst_reports, bull_argument, bear_argument
+        )
+        risk_status.update(label="✅ Risk assessment complete", state="complete")
+    except Exception as e:
+        risk_status.update(label="❌ Risk assessment failed", state="error")
+        st.error(f"Risk Manager failed: {e}")
+        st.stop()
 
 with st.expander("📋 Risk Report"):
     st.markdown(risk_report)
