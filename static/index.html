@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TradingAgents</title>
+  <script src="https://js.puter.com/v2/"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg: #0e1117; --surface: #1a1a2e; --border: #2d2d44;
+      --text: #e0e0e0; --muted: #888;
+      --accent: #00d4aa; --accent2: #0084ff;
+      --green: #00c853; --red: #ff4444; --yellow: #ffa726;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+    /* Layout */
+    .app { display: grid; grid-template-columns: 270px 1fr; min-height: 100vh; }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface); border-right: 1px solid var(--border);
+      padding: 20px 14px; display: flex; flex-direction: column; gap: 16px;
+      position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    }
+    .sidebar-logo { font-size: 1.3rem; font-weight: 700; }
+    .sidebar-sub { color: var(--muted); font-size: 0.75rem; margin-top: 2px; }
+
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 5px; }
+    input[type="text"] {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 0.95rem; outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); margin-top: 4px; }
+    .range-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.7rem; margin-top: 2px; }
+
+    .btn-primary {
+      width: 100%; background: linear-gradient(90deg, #00d4aa, #0084ff);
+      border: none; border-radius: 8px; padding: 11px;
+      color: white; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    hr { border: none; border-top: 1px solid var(--border); }
+
+    .pipeline-list { list-style: none; font-size: 0.78rem; color: var(--muted); }
+    .pipeline-list li { padding: 2px 0; }
+
+    /* Main */
+    .main { padding: 28px 32px; overflow-y: auto; }
+
+    /* Header */
+    .main-title {
+      background: linear-gradient(90deg, #00d4aa, #0084ff);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      font-size: 1.9rem; font-weight: 700;
+    }
+    .main-sub { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+
+    /* Info/Success boxes */
+    .box-info { background: rgba(0,132,255,0.08); border: 1px solid rgba(0,132,255,0.25); border-radius: 8px; padding: 14px 16px; margin-bottom: 18px; font-size: 0.9rem; }
+    .box-success { background: rgba(0,200,83,0.08); border: 1px solid rgba(0,200,83,0.25); border-radius: 8px; padding: 14px 16px; color: var(--green); font-size: 0.9rem; }
+    .box-error { background: rgba(255,68,68,0.08); border: 1px solid rgba(255,68,68,0.25); border-radius: 8px; padding: 14px 16px; color: var(--red); font-size: 0.9rem; margin-top: 12px; }
+
+    /* Step sections */
+    .step-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin-bottom: 20px; }
+    .step-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+    .step-badge { background: rgba(0,212,170,0.12); color: var(--accent); border-radius: 20px; padding: 2px 10px; font-size: 0.72rem; font-weight: 700; }
+
+    /* Agent grid */
+    .agents-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+    .agent-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 8px; text-align: center; font-size: 0.8rem; transition: border-color 0.2s; }
+    .agent-card.running { border-color: var(--yellow); }
+    .agent-card.done { border-color: var(--green); }
+    .agent-card.error { border-color: var(--red); }
+    .agent-icon { font-size: 1.3rem; }
+    .agent-name { margin-top: 4px; }
+    .agent-status { margin-top: 5px; font-size: 0.75rem; color: var(--muted); }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
+    .tab-btn { background: none; border: none; border-bottom: 2px solid transparent; padding: 7px 14px; color: var(--muted); cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Two column debate */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+    .debate-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .debate-card.bull { border-left: 3px solid var(--green); }
+    .debate-card.bear { border-left: 3px solid var(--red); }
+    .debate-card h3 { font-size: 0.9rem; margin-bottom: 10px; }
+
+    /* Streaming / output area */
+    .output-area { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; min-height: 80px; }
+
+    /* Markdown */
+    .md h1, .md h2, .md h3 { color: var(--accent); margin: 14px 0 6px; }
+    .md p { margin-bottom: 9px; line-height: 1.6; }
+    .md table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    .md th, .md td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; font-size: 0.88rem; }
+    .md th { background: var(--surface); color: var(--accent); }
+    .md ul, .md ol { padding-left: 20px; margin-bottom: 9px; }
+    .md li { line-height: 1.6; }
+    .md code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-family: monospace; font-size: 0.88em; }
+    .md pre { background: var(--surface); padding: 12px; border-radius: 6px; overflow-x: auto; margin-bottom: 9px; }
+    .md strong { color: #fff; }
+    .md blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--muted); }
+
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.75s linear infinite; vertical-align: middle; margin-right: 6px; }
+
+    /* Download button */
+    .btn-download { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; color: var(--text); cursor: pointer; font-size: 0.88rem; margin-top: 14px; }
+    .btn-download:hover { border-color: var(--accent); }
+
+    /* How it works table */
+    .how-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .how-table th { color: var(--accent); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 600; }
+    .how-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); line-height: 1.5; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ─── Sidebar ─────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div>
+      <div class="sidebar-logo">📈 TradingAgents</div>
+      <div class="sidebar-sub">No API key required · Powered by Puter.js</div>
+    </div>
+    <hr>
+    <div>
+      <label for="ticker">Stock Ticker Symbol</label>
+      <input type="text" id="ticker" value="AAPL" placeholder="e.g. AAPL, TSLA, NVDA" maxlength="6"
+             oninput="this.value=this.value.toUpperCase()">
+    </div>
+    <div>
+      <label>Debate Rounds: <strong id="rounds-val">2</strong></label>
+      <input type="range" id="rounds" min="1" max="3" value="2"
+             oninput="document.getElementById('rounds-val').textContent=this.value">
+      <div class="range-labels"><span>1</span><span>2</span><span>3</span></div>
+    </div>
+    <hr>
+    <button class="btn-primary" id="analyze-btn" onclick="startAnalysis()">🔍 Analyze Stock</button>
+    <hr>
+    <div>
+      <div style="font-size:0.78rem; color:var(--muted); margin-bottom:7px;">Agent Pipeline:</div>
+      <ul class="pipeline-list">
+        <li>① Fundamentals Analyst</li>
+        <li>② Sentiment Analyst</li>
+        <li>③ News Analyst</li>
+        <li>④ Technical Analyst</li>
+        <li>⑤ Bullish Researcher</li>
+        <li>⑥ Bearish Researcher</li>
+        <li>⑦ Risk Manager</li>
+        <li>⑧ Portfolio Manager</li>
+      </ul>
+    </div>
+    <div style="margin-top:auto; font-size:0.72rem; color:var(--muted);">
+      Data: yfinance · AI: Puter.js (Claude)
+    </div>
+  </aside>
+
+  <!-- ─── Main ───────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Landing -->
+    <div id="landing">
+      <div style="margin-bottom:20px;">
+        <div class="main-title">TradingAgents</div>
+        <div class="main-sub">Multi-Agent Financial Trading Framework · Real-time yfinance data · Free AI via Puter.js</div>
+      </div>
+      <div class="box-info">
+        ℹ️ Enter a ticker symbol and click <strong>Analyze Stock</strong> to launch the multi-agent pipeline.<br><br>
+        <strong>✅ No API key required!</strong> AI runs entirely in your browser using <strong>Puter.js</strong>.
+      </div>
+      <div class="step-section">
+        <div class="step-title">📖 How it works</div>
+        <table class="how-table">
+          <thead>
+            <tr><th>Phase</th><th>Agents</th><th>What They Do</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1. Intel</td><td>Fundamentals, Sentiment, News, Technical</td><td>Run <strong>in parallel</strong> to gather market data</td></tr>
+            <tr><td>2. Debate</td><td>Bullish Researcher, Bearish Researcher</td><td>Build <strong>opposing theses</strong> through structured debate</td></tr>
+            <tr><td>3. Risk</td><td>Risk Manager</td><td>Assess <strong>portfolio risk</strong> and position sizing</td></tr>
+            <tr><td>4. Decision</td><td>Portfolio Manager</td><td><strong>Synthesize</strong> everything into a BUY/SELL/HOLD recommendation</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Results (populated dynamically) -->
+    <div id="results" style="display:none;"></div>
+
+  </main>
+</div>
+
+<script>
+// ─── Config ──────────────────────────────────────────────────────────────────
+const AI_MODEL = 'claude-3-5-sonnet';  // Puter.js model
+
+// ─── Puter.js helpers ────────────────────────────────────────────────────────
+async function callClaude(prompt) {
+  const resp = await puter.ai.chat(prompt, { model: AI_MODEL });
+  if (typeof resp === 'string') return resp;
+  // Handle various response shapes
+  const c = resp?.message?.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.map(b => b.text ?? b).join('');
+  return resp?.text ?? String(resp);
+}
+
+async function streamClaude(prompt, onChunk) {
+  let accumulated = '';
+  try {
+    const stream = await puter.ai.chat(prompt, { model: AI_MODEL, stream: true });
+    for await (const chunk of stream) {
+      const t = chunk?.text ?? chunk?.delta?.text ?? '';
+      accumulated += t;
+      onChunk(accumulated);
+    }
+  } catch {
+    // Fallback: non-streaming
+    accumulated = await callClaude(prompt);
+    onChunk(accumulated);
+  }
+  return accumulated;
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function md(text) { return marked.parse(text ?? ''); }
+
+function setAgent(id, cls, statusText) {
+  const el = document.getElementById('agent-' + id);
+  if (!el) return;
+  el.className = 'agent-card ' + cls;
+  el.querySelector('.agent-status').textContent = statusText;
+}
+
+// ─── Agent Prompts ────────────────────────────────────────────────────────────
+function buildPrompt(role, data, task) {
+  return `${role}\n\n=== MARKET DATA ===\n${JSON.stringify(data, null, 2)}\n\n=== YOUR TASK ===\n${task}`;
+}
+
+function fundamentalsPrompt(ticker, d) {
+  return buildPrompt(
+    `You are a CFA-level Fundamentals Analyst at a top-tier investment firm. Your job is to assess a company's intrinsic value through rigorous financial analysis.`,
+    { company_info: d.company_info, financials: d.financials, balance_sheet: d.balance_sheet, analyst_ratings: d.analyst_ratings },
+    `Conduct a comprehensive fundamental analysis of ${ticker}. Cover:
+1. Business overview and competitive position
+2. Valuation assessment (cheap, fair, or expensive?)
+3. Financial health (profitability, margins, growth)
+4. Balance sheet strength (debt, cash, liquidity)
+5. Analyst consensus and price target upside/downside
+6. Overall signal: BULLISH / NEUTRAL / BEARISH with reasoning
+
+Be specific with numbers. Use clear section headers.`
+  );
+}
+
+function sentimentPrompt(ticker, d) {
+  return buildPrompt(
+    `You are a Market Sentiment Analyst specializing in crowd psychology and positioning data.`,
+    { sentiment: d.sentiment, news: d.news, analyst_ratings: d.analyst_ratings },
+    `Analyze market sentiment for ${ticker}. Cover:
+1. Short interest analysis — bearish positioning, short squeeze risk?
+2. Institutional/insider ownership trends
+3. News sentiment — positive, negative, or mixed?
+4. Overall market mood
+5. Sentiment signal: BULLISH / NEUTRAL / BEARISH with reasoning`
+  );
+}
+
+function newsPrompt(ticker, d) {
+  return buildPrompt(
+    `You are a News & Macro Analyst at a hedge fund.`,
+    { company_info: d.company_info, news: d.news },
+    `Analyze recent news and catalysts for ${ticker}. Cover:
+1. Top 3-5 most important recent news items and market impact
+2. Upcoming catalysts or risk events
+3. Macro/sector context
+4. News signal: BULLISH / NEUTRAL / BEARISH with reasoning
+
+Be concise, focus on the next 3-6 months.`
+  );
+}
+
+function technicalPrompt(ticker, d) {
+  return buildPrompt(
+    `You are a Technical Analyst with 15 years of experience in price action and quantitative signals.`,
+    { technical: d.technical, price_history: d.price_history },
+    `Conduct technical analysis of ${ticker}. Cover:
+1. Trend assessment (uptrend, downtrend, or ranging?)
+2. Momentum signals — RSI and MACD interpretation
+3. Key price levels — support, resistance, and targets
+4. Volume confirmation
+5. Technical signal: BULLISH / NEUTRAL / BEARISH with reasoning
+
+Be specific about price levels and indicator readings.`
+  );
+}
+
+function bullishPrompt(ticker, reports, bearArg, roundNum) {
+  const rText = Object.entries(reports).map(([k,v]) => `=== ${k} ===\n${v}`).join('\n\n');
+  const counter = bearArg
+    ? `\nThe bearish researcher has argued:\n--- BEAR ARGUMENT (Round ${roundNum-1}) ---\n${bearArg}\n---\nFirst rebut their strongest points with evidence, then reinforce the bull case.\n`
+    : '';
+  return `You are the Bullish Researcher at a long/short equity hedge fund. Construct the strongest possible BULL case for ${ticker}.
+
+ANALYST REPORTS:
+${rText}
+${counter}
+Provide a structured bull thesis:
+1. Core investment thesis
+2. Key financial/fundamental strengths
+3. Technical setup supporting entry
+4. Catalysts that could drive the stock higher
+5. Rebuttal of the bear case (if applicable)
+6. Price target and expected return
+
+Be specific, data-driven, and persuasive.`;
+}
+
+function bearishPrompt(ticker, reports, bullArg, roundNum) {
+  const rText = Object.entries(reports).map(([k,v]) => `=== ${k} ===\n${v}`).join('\n\n');
+  const counter = bullArg
+    ? `\nThe bullish researcher has argued:\n--- BULL ARGUMENT (Round ${roundNum}) ---\n${bullArg}\n---\nFirst dismantle their key assumptions, then reinforce the bear case.\n`
+    : '';
+  return `You are the Bearish Researcher at a long/short equity hedge fund. Construct the strongest possible BEAR case for ${ticker}.
+
+ANALYST REPORTS:
+${rText}
+${counter}
+Provide a structured bear thesis:
+1. Core concern (why risky or overvalued?)
+2. Financial/fundamental weaknesses or red flags
+3. Technical warning signals
+4. Macro or sector headwinds
+5. Rebuttal of the bull case (if applicable)
+6. Downside scenario and price target
+
+Be specific, evidence-based, and rigorous.`;
+}
+
+function riskPrompt(ticker, reports, bullCase, bearCase) {
+  const ctx = Object.entries(reports).map(([k,v]) => `=== ${k} ===\n${v}`).join('\n\n');
+  return `You are the Chief Risk Officer at a multi-strategy hedge fund. Independently assess the risk/reward profile for ${ticker}.
+
+ANALYST REPORTS:
+${ctx}
+
+BULL CASE:
+${bullCase}
+
+BEAR CASE:
+${bearCase}
+
+Provide a risk assessment:
+1. Volatility profile (beta, implied move range)
+2. Key risk factors (company-specific, sector, macro)
+3. Liquidity assessment
+4. Suggested position sizing (% of portfolio)
+5. Stop-loss level recommendation
+6. Risk/reward ratio
+7. Overall risk rating: LOW / MEDIUM / HIGH / VERY HIGH`;
+}
+
+function portfolioManagerPrompt(ticker, reports, bullCase, bearCase, riskReport) {
+  const ctx = Object.entries(reports).map(([k,v]) => `=== ${k} ===\n${v}`).join('\n\n');
+  return `You are the Portfolio Manager of a sophisticated multi-agent trading system. Synthesize all intelligence and make the final trading recommendation for ${ticker}.
+
+Use this output format:
+
+## 📊 Trading Analysis: ${ticker}
+
+### Executive Summary
+[One-paragraph overview]
+
+### Analyst Findings
+| Analyst | Signal | Key Insight |
+|---------|--------|-------------|
+| Fundamentals | 🟢/🟡/🔴 | [finding] |
+| Sentiment | 🟢/🟡/🔴 | [finding] |
+| News | 🟢/🟡/🔴 | [finding] |
+| Technical | 🟢/🟡/🔴 | [finding] |
+
+### Bull vs Bear Debate
+**Bull Case**: [key arguments]
+**Bear Case**: [key arguments]
+
+### Risk Assessment
+- Volatility Level: [High/Medium/Low]
+- Liquidity: [Good/Fair/Poor]
+- Portfolio Impact: [analysis]
+
+### 🎯 Final Recommendation
+**Action**: [BUY/SELL/HOLD]
+**Confidence**: [High/Medium/Low]
+**Suggested Position**: [% of portfolio]
+**Target Price**: [price]
+**Stop Loss**: [level]
+
+### ⚠️ Disclaimers
+- AI-generated analysis for educational purposes only
+- Not financial advice — always do your own research
+
+---
+
+ANALYST REPORTS:
+${ctx}
+
+BULL CASE:
+${bullCase}
+
+BEAR CASE:
+${bearCase}
+
+RISK ASSESSMENT:
+${riskReport}
+
+Now synthesize all of this into your final recommendation. Be decisive.`;
+}
+
+// ─── Main Analysis Flow ───────────────────────────────────────────────────────
+let savedData = {};
+
+async function startAnalysis() {
+  const ticker = document.getElementById('ticker').value.toUpperCase().trim();
+  const debateRounds = parseInt(document.getElementById('rounds').value);
+  if (!ticker) return;
+
+  document.getElementById('landing').style.display = 'none';
+  document.getElementById('analyze-btn').disabled = true;
+
+  const resultsEl = document.getElementById('results');
+  resultsEl.style.display = 'block';
+  savedData = { ticker, reports: {}, bullCase: '', bearCase: '', riskReport: '', recommendation: '' };
+
+  try {
+    // Step 0: Fetch data
+    resultsEl.innerHTML = `
+      <div style="margin-bottom:20px;">
+        <div class="main-title" style="font-size:1.4rem;">📊 Analysis: <code style="-webkit-text-fill-color:inherit; background:var(--surface); padding:2px 8px; border-radius:4px;">${ticker}</code></div>
+      </div>
+      <div class="step-section">
+        <div class="step-title"><span class="step-badge">Data</span> Fetching Market Data</div>
+        <div><span class="spin"></span> Loading yfinance data for ${ticker}...</div>
+      </div>`;
+
+    const resp = await fetch(`/api/stock/${ticker}`);
+    if (!resp.ok) throw new Error(`Data fetch failed: ${resp.statusText}`);
+    const stockData = await resp.json();
+
+    // Build the full results scaffold
+    resultsEl.innerHTML = `
+      <div style="margin-bottom:20px;">
+        <div class="main-title" style="font-size:1.4rem;">📊 Analysis: <code style="-webkit-text-fill-color:inherit; background:var(--surface); padding:2px 8px; border-radius:4px;">${ticker}</code></div>
+      </div>
+
+      <!-- Step 1 -->
+      <div class="step-section">
+        <div class="step-title"><span class="step-badge">Step 1</span> Analyst Team</div>
+        <div class="agents-grid">
+          ${[['fundamentals','💰','Fundamentals'],['sentiment','🧠','Sentiment'],['news','📰','News'],['technical','📉','Technical']].map(([id,icon,name]) => `
+          <div class="agent-card" id="agent-${id}">
+            <div class="agent-icon">${icon}</div>
+            <div class="agent-name">${name} Analyst</div>
+            <div class="agent-status">⏳ Waiting...</div>
+          </div>`).join('')}
+        </div>
+        <div id="analyst-tabs" style="display:none;">
+          <div class="tabs" id="tab-btns"></div>
+          <div id="tab-panels"></div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="step-section" id="step2" style="display:none;">
+        <div class="step-title"><span class="step-badge">Step 2</span> Researcher Debate</div>
+        <div id="debate-status"></div>
+        <div id="debate-cards"></div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="step-section" id="step3" style="display:none;">
+        <div class="step-title"><span class="step-badge">Step 3</span> Risk Assessment</div>
+        <div id="risk-content" class="output-area"><span class="spin"></span> Risk Manager assessing...</div>
+      </div>
+
+      <!-- Step 4 -->
+      <div class="step-section" id="step4" style="display:none;">
+        <div class="step-title"><span class="step-badge">Step 4</span> Portfolio Manager Recommendation</div>
+        <div style="font-size:0.82rem; color:var(--muted); margin-bottom:10px;">Synthesizing all intelligence into a final trading decision (streaming)...</div>
+        <div id="pm-output" class="output-area"><span class="spin"></span> Starting...</div>
+      </div>
+
+      <div id="final-box" style="display:none;"></div>`;
+
+    // ── Step 1: Analysts in parallel ──────────────────────────────────────────
+    const analystCfg = [
+      { id: 'fundamentals', label: 'Fundamentals Analyst', prompt: fundamentalsPrompt(ticker, stockData) },
+      { id: 'sentiment',    label: 'Sentiment Analyst',    prompt: sentimentPrompt(ticker, stockData) },
+      { id: 'news',         label: 'News Analyst',         prompt: newsPrompt(ticker, stockData) },
+      { id: 'technical',    label: 'Technical Analyst',    prompt: technicalPrompt(ticker, stockData) },
+    ];
+
+    analystCfg.forEach(c => setAgent(c.id, 'running', '⏳ Running...'));
+
+    const analystResults = await Promise.all(analystCfg.map(async cfg => {
+      try {
+        const report = await callClaude(cfg.prompt);
+        setAgent(cfg.id, 'done', '✅ Complete');
+        return { label: cfg.label, report };
+      } catch (e) {
+        setAgent(cfg.id, 'error', '❌ Failed');
+        return { label: cfg.label, report: `Error: ${e.message}` };
+      }
+    }));
+
+    const reports = {};
+    analystResults.forEach(({ label, report }) => {
+      reports[label] = report;
+      savedData.reports[label] = report;
+    });
+
+    // Build analyst tabs
+    const icons = { 'Fundamentals Analyst': '💰', 'Sentiment Analyst': '🧠', 'News Analyst': '📰', 'Technical Analyst': '📉' };
+    const tabBtns = document.getElementById('tab-btns');
+    const tabPanels = document.getElementById('tab-panels');
+
+    analystResults.forEach(({ label, report }, i) => {
+      const panelId = `panel-${i}`;
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
+      btn.textContent = `${icons[label] || ''} ${label}`;
+      btn.onclick = () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(panelId).classList.add('active');
+      };
+      tabBtns.appendChild(btn);
+
+      const panel = document.createElement('div');
+      panel.id = panelId;
+      panel.className = 'tab-panel md' + (i === 0 ? ' active' : '');
+      panel.innerHTML = md(report);
+      tabPanels.appendChild(panel);
+    });
+
+    document.getElementById('analyst-tabs').style.display = 'block';
+
+    // ── Step 2: Debate ────────────────────────────────────────────────────────
+    document.getElementById('step2').style.display = 'block';
+    const debateStatus = document.getElementById('debate-status');
+    const debateCards  = document.getElementById('debate-cards');
+
+    let bullArg = '', bearArg = '';
+
+    for (let round = 1; round <= debateRounds; round++) {
+      debateStatus.innerHTML = `<div style="color:var(--muted); margin-bottom:8px;"><span class="spin"></span> Round ${round}/${debateRounds}: Bullish Researcher building case...</div>`;
+      bullArg = await callClaude(bullishPrompt(ticker, reports, bearArg, round));
+
+      debateStatus.innerHTML = `<div style="color:var(--muted); margin-bottom:8px;"><span class="spin"></span> Round ${round}/${debateRounds}: Bearish Researcher responding...</div>`;
+      bearArg = await callClaude(bearishPrompt(ticker, reports, bullArg, round));
+
+      debateStatus.innerHTML = `<div style="color:var(--green); margin-bottom:8px;">✅ Round ${round}/${debateRounds} complete.</div>`;
+    }
+
+    savedData.bullCase = bullArg;
+    savedData.bearCase = bearArg;
+
+    debateCards.innerHTML = `
+      <div class="two-col">
+        <div class="debate-card bull">
+          <h3 style="color:var(--green);">🟢 Bull Case</h3>
+          <div class="md">${md(bullArg)}</div>
+        </div>
+        <div class="debate-card bear">
+          <h3 style="color:var(--red);">🔴 Bear Case</h3>
+          <div class="md">${md(bearArg)}</div>
+        </div>
+      </div>`;
+
+    // ── Step 3: Risk ──────────────────────────────────────────────────────────
+    document.getElementById('step3').style.display = 'block';
+    const riskContent = document.getElementById('risk-content');
+
+    const riskReport = await callClaude(riskPrompt(ticker, reports, bullArg, bearArg));
+    savedData.riskReport = riskReport;
+    riskContent.innerHTML = `<div class="md">${md(riskReport)}</div>`;
+
+    // ── Step 4: Portfolio Manager (streaming) ─────────────────────────────────
+    document.getElementById('step4').style.display = 'block';
+    const pmOutput = document.getElementById('pm-output');
+    pmOutput.innerHTML = '';
+
+    const pmPr = portfolioManagerPrompt(ticker, reports, bullArg, bearArg, riskReport);
+    const fullRec = await streamClaude(pmPr, (accumulated) => {
+      pmOutput.innerHTML = `<div class="md">${md(accumulated)}</div>`;
+    });
+
+    savedData.recommendation = fullRec;
+
+    // ── Done ──────────────────────────────────────────────────────────────────
+    const finalBox = document.getElementById('final-box');
+    finalBox.style.display = 'block';
+    finalBox.innerHTML = `
+      <div class="box-success">✅ Analysis complete for <strong>${ticker}</strong>. AI-generated analysis for educational purposes only — not financial advice.</div>
+      <button class="btn-download" onclick="downloadReport()">📥 Download Full Report</button>`;
+
+  } catch (err) {
+    const resultsEl = document.getElementById('results');
+    resultsEl.innerHTML += `<div class="box-error">❌ Error: ${err.message}</div>`;
+    console.error(err);
+  } finally {
+    document.getElementById('analyze-btn').disabled = false;
+  }
+}
+
+function downloadReport() {
+  const { ticker, reports, bullCase, bearCase, riskReport, recommendation } = savedData;
+  const text = `# TradingAgents Report: ${ticker}
+
+## Analyst Reports
+
+${Object.entries(reports).map(([k,v]) => `### ${k}\n${v}`).join('\n\n')}
+
+## Bull Case
+${bullCase}
+
+## Bear Case
+${bearCase}
+
+## Risk Assessment
+${riskReport}
+
+## Portfolio Manager Recommendation
+${recommendation}
+
+---
+*Generated by TradingAgents — AI-powered analysis for educational purposes only.*
+*Not financial advice. Always do your own research.*
+`;
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `trading_report_${ticker}.md` });
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+</body>
+</html>
