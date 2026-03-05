@@ -30,13 +30,15 @@ def _run_tool_loop(
     messages = [{"role": "user", "content": user_message}]
 
     while True:
-        response = client.messages.create(
+        kwargs = dict(
             model=MODEL,
             max_tokens=max_tokens,
             system=system,
-            tools=tools,
             messages=messages,
         )
+        if tools:
+            kwargs["tools"] = tools
+        response = client.messages.create(**kwargs)
 
         if response.stop_reason == "end_turn":
             # Extract text blocks (skip thinking blocks)
