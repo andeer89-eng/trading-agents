@@ -1,13 +1,15 @@
 """
 TradingAgents — Streamlit Web Interface
-Multi-Agent Financial Trading Framework powered by Claude claude-opus-4-6 + yfinance
+Multi-Agent Financial Trading Framework
+
+Supports Anthropic, OpenAI, Groq, OpenRouter, and any OpenAI-compatible API.
 """
 
 import os
 import concurrent.futures
 import streamlit as st
-import anthropic
 
+from trading_agents.llm import LLMClient, PROVIDERS
 from trading_agents.agents import (
     run_fundamentals_analyst,
     run_sentiment_analyst,
@@ -20,7 +22,7 @@ from trading_agents.agents import (
 )
 from trading_agents.orchestrator import PORTFOLIO_MANAGER_SYSTEM
 
-# ─── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ────────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="TradingAgents",
@@ -28,8 +30,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
@@ -41,110 +41,129 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
         margin-bottom: 0;
     }
-    .sub-header {
-        color: #888;
-        font-size: 0.95rem;
-        margin-top: 0;
-    }
-    .metric-card {
-        background: #1a1a2e;
-        border-radius: 8px;
-        padding: 16px;
-        border: 1px solid #333;
-    }
-    .agent-badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 6px;
-    }
+    .sub-header { color: #888; font-size: 0.95rem; margin-top: 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Header ───────────────────────────────────────────────────────────────────
+# ── Header ─────────────────────────────────────────────────────────────────────
 
 col_logo, col_title = st.columns([1, 8])
 with col_logo:
     st.markdown("## 📈")
 with col_title:
     st.markdown('<p class="main-header">TradingAgents</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="sub-header">Multi-Agent Financial Trading Framework · '
-        'Powered by Claude claude-opus-4-6 + yfinance</p>',
-        unsafe_allow_html=True,
-    )
 
 st.divider()
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("⚙️ Configuration")
 
+    # ── Stock & debate settings ──────────────────────────────────────────────
     ticker_input = st.text_input(
         "Stock Ticker Symbol",
         value="AAPL",
         placeholder="e.g. AAPL, TSLA, NVDA",
-        help="Enter any valid US stock ticker symbol",
     ).upper().strip()
 
     debate_rounds = st.select_slider(
         "Debate Rounds",
         options=[1, 2, 3],
         value=2,
-        help="More rounds = deeper bull/bear debate, but slower",
+        help="More rounds = deeper debate, but slower",
     )
 
     st.divider()
-    st.subheader("🔑 API Key")
 
-    # Try: Streamlit secrets → env var → user input
+    # ── AI Provider ──────────────────────────────────────────────────────────
+    st.subheader("🤖 AI Provider")
+
+    provider_labels = {k: v["label"] for k, v in PROVIDERS.items()}
+    provider_key = st.selectbox(
+        "Provider",
+        options=list(provider_labels.keys()),
+        format_func=lambda k: provider_labels[k],
+        index=0,
+    )
+
+    pinfo = PROVIDERS[provider_key]
+
+    # Model selector
+    if provider_key == "custom":
+        selected_model = st.text_input(
+            "Model name",
+            placeholder="e.g. mistral-small, phi-3-mini",
+            help="Enter the exact model name your endpoint expects",
+        )
+        custom_base_url = st.text_input(
+            "Base URL",
+            placeholder="http://localhost:11434/v1",
+            help="OpenAI-compatible endpoint URL",
+        )
+    else:
+        selected_model = st.selectbox("Model", pinfo["models"], index=0)
+        custom_base_url = None
+
+    # API key — check secrets → env var → user input
+    env_key = pinfo["key_env"]
     api_key = (
-        st.secrets.get("ANTHROPIC_API_KEY", "")
-        or os.environ.get("ANTHROPIC_API_KEY", "")
+        st.secrets.get(env_key, "")
+        or os.environ.get(env_key, "")
     )
 
     if api_key:
-        st.success("✓ API key loaded from environment", icon="✅")
+        st.success(f"✓ API key loaded from environment ({env_key})", icon="✅")
     else:
         api_key = st.text_input(
-            "Anthropic API Key",
+            "API Key",
             type="password",
-            placeholder="sk-ant-...",
-            help="Get your key at console.anthropic.com",
+            placeholder=pinfo["key_hint"],
         )
 
     st.divider()
+
+    # Validate before enabling button
+    ready = bool(ticker_input and api_key and selected_model)
+    if provider_key == "custom" and not custom_base_url:
+        ready = False
+
     analyze_btn = st.button(
         "🔍 Analyze Stock",
         type="primary",
         use_container_width=True,
-        disabled=not (ticker_input and api_key),
+        disabled=not ready,
     )
 
     st.divider()
     st.caption("**Agent Pipeline:**")
-    st.caption("① Fundamentals Analyst")
-    st.caption("② Sentiment Analyst")
-    st.caption("③ News Analyst")
-    st.caption("④ Technical Analyst")
-    st.caption("⑤ Bullish Researcher")
-    st.caption("⑥ Bearish Researcher")
-    st.caption("⑦ Risk Manager")
-    st.caption("⑧ Portfolio Manager")
+    for cap in [
+        "① Fundamentals Analyst",
+        "② Sentiment Analyst",
+        "③ News Analyst",
+        "④ Technical Analyst",
+        "⑤ Bullish Researcher",
+        "⑥ Bearish Researcher",
+        "⑦ Risk Manager",
+        "⑧ Portfolio Manager",
+    ]:
+        st.caption(cap)
 
-# ─── Landing state ────────────────────────────────────────────────────────────
+# ── Landing state ──────────────────────────────────────────────────────────────
 
 if not analyze_btn:
+    st.markdown(
+        f'<p class="sub-header">Multi-Agent Financial Trading Framework · '
+        f'Provider: <strong>{pinfo["label"]}</strong> · Model: <strong>{selected_model or "—"}</strong></p>',
+        unsafe_allow_html=True,
+    )
     st.info(
         "👈 Enter a ticker symbol and click **Analyze Stock** to launch the multi-agent pipeline.",
         icon="ℹ️",
     )
     with st.expander("📖 How it works"):
         st.markdown("""
-**TradingAgents** deploys a team of 8 specialized Claude AI agents that mirror a real trading firm:
+**TradingAgents** deploys a team of 8 specialized AI agents that mirror a real trading firm:
 
 | Phase | Agents | What They Do |
 |-------|--------|--------------|
@@ -154,35 +173,43 @@ if not analyze_btn:
 | 4. Decision | Portfolio Manager | **Synthesize** everything into a BUY/SELL/HOLD recommendation |
 
 All analysts use **real-time market data** via yfinance (prices, financials, RSI, MACD, news, etc.)
+
+**Supported providers:** Anthropic · OpenAI · Groq · OpenRouter · Any OpenAI-compatible endpoint
         """)
     st.stop()
 
-# ─── Validate inputs ──────────────────────────────────────────────────────────
+# ── Validate ───────────────────────────────────────────────────────────────────
 
 if not api_key:
-    st.error("Please provide your Anthropic API key in the sidebar.")
+    st.error("Please provide your API key in the sidebar.")
     st.stop()
 
 if not ticker_input:
     st.error("Please enter a stock ticker symbol.")
     st.stop()
 
-# ─── Initialize client ────────────────────────────────────────────────────────
+# ── Create client ──────────────────────────────────────────────────────────────
 
 try:
-    client = anthropic.Anthropic(api_key=api_key)
+    client = LLMClient(
+        provider=provider_key,
+        api_key=api_key,
+        model=selected_model,
+        base_url=custom_base_url,
+    )
 except Exception as e:
-    st.error(f"Failed to initialize Anthropic client: {e}")
+    st.error(f"Failed to initialize AI client: {e}")
     st.stop()
 
-# ─── Ticker banner ────────────────────────────────────────────────────────────
+# ── Ticker banner ──────────────────────────────────────────────────────────────
 
 st.markdown(f"## 📊 Analysis: `{ticker_input}`")
+st.caption(f"Provider: {pinfo['label']} · Model: {selected_model}")
 
-# ─── STEP 1: Parallel Analyst Team ───────────────────────────────────────────
+# ── STEP 1: Parallel Analyst Team ─────────────────────────────────────────────
 
 st.markdown("### Step 1 — Analyst Team")
-analyst_reports = {}
+analyst_reports: dict[str, str] = {}
 
 analyst_fns = {
     "Fundamentals Analyst": run_fundamentals_analyst,
@@ -190,7 +217,6 @@ analyst_fns = {
     "News Analyst":         run_news_analyst,
     "Technical Analyst":    run_technical_analyst,
 }
-
 analyst_icons = {
     "Fundamentals Analyst": "💰",
     "Sentiment Analyst":    "🧠",
@@ -203,52 +229,40 @@ status_placeholders = {}
 for i, name in enumerate(analyst_fns):
     with progress_cols[i]:
         status_placeholders[name] = st.empty()
-        status_placeholders[name].markdown(
-            f"{analyst_icons[name]} **{name}**\n\n⏳ Waiting..."
-        )
+        status_placeholders[name].markdown(f"{analyst_icons[name]} **{name}**\n\n⏳ Waiting...")
 
-def run_analyst_with_status(args):
+def _run_analyst(args):
     name, fn = args
     try:
-        report = fn(client, ticker_input)
-        return name, report, None
+        return name, fn(client, ticker_input), None
     except Exception as e:
         return name, None, str(e)
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-    futures = {
-        executor.submit(run_analyst_with_status, (name, fn)): name
-        for name, fn in analyst_fns.items()
-    }
+    futures = {executor.submit(_run_analyst, (n, f)): n for n, f in analyst_fns.items()}
     for future in concurrent.futures.as_completed(futures):
         name, report, error = future.result()
         if error:
-            analyst_reports[name] = f"[Analysis unavailable — see error below]"
-            status_placeholders[name].markdown(
-                f"{analyst_icons[name]} **{name}**\n\n❌ Failed"
-            )
+            analyst_reports[name] = "[Analysis unavailable]"
+            status_placeholders[name].markdown(f"{analyst_icons[name]} **{name}**\n\n❌ Failed")
             st.error(f"**{name} failed:** {error}")
         else:
             analyst_reports[name] = report
-            status_placeholders[name].markdown(
-                f"{analyst_icons[name]} **{name}**\n\n✅ Complete"
-            )
+            status_placeholders[name].markdown(f"{analyst_icons[name]} **{name}**\n\n✅ Complete")
 
-if all(r.startswith("[Analysis unavailable") for r in analyst_reports.values()):
-    st.error("All analyst agents failed. Check the errors above — your API key may lack access to this model.")
+if all(r.startswith("[Analysis") for r in analyst_reports.values()):
+    st.error("All analysts failed. Check your API key and model name.")
     st.stop()
 
-# Show analyst reports in tabs
-st.markdown("**Analyst Reports** (click to expand):")
-tab_labels = [f"{analyst_icons[n]} {n}" for n in analyst_reports]
-tabs = st.tabs(tab_labels)
+st.markdown("**Analyst Reports:**")
+tabs = st.tabs([f"{analyst_icons[n]} {n}" for n in analyst_reports])
 for tab, (name, report) in zip(tabs, analyst_reports.items()):
     with tab:
         st.markdown(report)
 
 st.divider()
 
-# ─── STEP 2: Researcher Debate ────────────────────────────────────────────────
+# ── STEP 2: Researcher Debate ──────────────────────────────────────────────────
 
 st.markdown("### Step 2 — Researcher Debate")
 st.caption(f"Running {debate_rounds} round(s) of bull vs bear debate...")
@@ -286,7 +300,7 @@ with col_bear:
 
 st.divider()
 
-# ─── STEP 3: Risk Assessment ──────────────────────────────────────────────────
+# ── STEP 3: Risk Assessment ────────────────────────────────────────────────────
 
 st.markdown("### Step 3 — Risk Assessment")
 
@@ -306,12 +320,10 @@ with st.expander("📋 Risk Report"):
 
 st.divider()
 
-# ─── STEP 4: Portfolio Manager Final Recommendation (streamed) ────────────────
+# ── STEP 4: Portfolio Manager Final Recommendation (streamed) ──────────────────
 
 st.markdown("### Step 4 — Portfolio Manager Recommendation")
 st.caption("Synthesizing all intelligence into a final trading decision (streaming)...")
-
-recommendation_container = st.empty()
 
 full_recommendation = st.write_stream(
     stream_portfolio_manager(
@@ -328,12 +340,13 @@ full_recommendation = st.write_stream(
 st.divider()
 st.success(
     f"✅ Analysis complete for **{ticker_input}**. "
-    "This is AI-generated analysis for educational purposes only — not financial advice.",
+    "AI-generated for educational purposes only — not financial advice.",
     icon="✅",
 )
 
-# Download button for the full report
 report_text = f"""# TradingAgents Report: {ticker_input}
+
+Provider: {pinfo['label']} · Model: {selected_model}
 
 ## Analyst Reports
 
@@ -361,5 +374,4 @@ st.download_button(
     data=report_text,
     file_name=f"trading_report_{ticker_input}.md",
     mime="text/markdown",
-    use_container_width=False,
 )

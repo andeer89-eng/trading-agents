@@ -125,6 +125,18 @@
         /* ── Download ── */
         .download-area { text-align: center; margin-top: 20px; }
         .disclaimer { text-align: center; color: var(--muted); font-size: .72rem; margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+        /* ── Provider config panel ── */
+        .cfg-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+        .cfg-panel summary { padding: 12px 18px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: .85rem; font-weight: 600; user-select: none; list-style: none; }
+        .cfg-panel summary::-webkit-details-marker { display: none; }
+        .cfg-panel summary::after { content: '▾'; margin-left: auto; font-size: .9rem; color: var(--muted); }
+        details[open].cfg-panel summary::after { content: '▴'; }
+        .cfg-body { padding: 14px 18px 18px; border-top: 1px solid var(--border); display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+        .cfg-badge { margin-left: auto; font-size: .7rem; padding: 3px 9px; border-radius: 20px; font-weight: 600; }
+        .cfg-badge.free { background: rgba(0,212,170,.12); border: 1px solid var(--green); color: var(--green); }
+        .cfg-badge.key  { background: rgba(0,132,255,.12); border: 1px solid var(--blue); color: #88bbff; }
+        .cfg-note { font-size: .7rem; color: var(--muted); margin-top: 6px; width: 100%; }
     </style>
 </head>
 <body>
@@ -135,10 +147,48 @@
         <div class="header-title">TradingAgents</div>
         <div class="header-sub">Multi-Agent AI Stock Analysis · Claude via Puter.js · No API key required</div>
     </div>
-    <span class="free-badge">⚡ FREE · No Sign-up</span>
+    <span class="free-badge" id="hdr-badge">⚡ FREE · Puter.js</span>
 </header>
 
 <div class="container">
+
+    <!-- Provider config -->
+    <details class="cfg-panel" id="cfg-details">
+        <summary>
+            ⚙️ AI Provider
+            <span id="cfg-summary-badge" class="cfg-badge free">Puter.js · FREE</span>
+        </summary>
+        <div class="cfg-body">
+            <div class="input-group">
+                <label>Provider</label>
+                <select id="cfg-provider" onchange="onProviderChange()">
+                    <option value="puter">Puter.js  (FREE — no key needed)</option>
+                    <option value="anthropic">Anthropic  (Claude)</option>
+                    <option value="openai">OpenAI  (ChatGPT)</option>
+                    <option value="groq">Groq  (Llama — fast, free tier)</option>
+                    <option value="openrouter">OpenRouter  (50 + models)</option>
+                    <option value="custom">Custom / Self-hosted</option>
+                </select>
+            </div>
+            <div class="input-group" id="cfg-model-wrap">
+                <label>Model</label>
+                <select id="cfg-model"></select>
+            </div>
+            <div class="input-group" id="cfg-custom-model-wrap" style="display:none">
+                <label>Model name</label>
+                <input type="text" id="cfg-custom-model" placeholder="e.g. mistral-small" style="width:180px">
+            </div>
+            <div class="input-group" id="cfg-key-wrap" style="display:none">
+                <label>API Key</label>
+                <input type="password" id="cfg-key" placeholder="" style="width:240px" oninput="saveConfig()">
+            </div>
+            <div class="input-group" id="cfg-url-wrap" style="display:none">
+                <label>Base URL</label>
+                <input type="text" id="cfg-url" placeholder="http://localhost:11434/v1" style="width:240px" oninput="saveConfig()">
+            </div>
+            <p class="cfg-note" id="cfg-note">API key stored in browser sessionStorage only — clears when you close this tab.</p>
+        </div>
+    </details>
 
     <!-- Input -->
     <div class="input-panel">
@@ -465,10 +515,90 @@ ${recent}`;
 }
 
 // ═══════════════════════════════════════════════════════════
-// PUTER.JS AI
+// PROVIDER CONFIG
 // ═══════════════════════════════════════════════════════════
-const MODEL = 'claude-opus-4-6';
+const PROV = {
+    puter:       { models: ['claude-opus-4-6'],                                     base: null,                                   hint: '' },
+    anthropic:   { models: ['claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5-20251001'], base: 'https://api.anthropic.com/v1',  hint: 'sk-ant-…  console.anthropic.com' },
+    openai:      { models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','gpt-3.5-turbo'],   base: 'https://api.openai.com/v1',            hint: 'sk-…  platform.openai.com' },
+    groq:        { models: ['llama-3.3-70b-versatile','llama-3.1-70b-versatile','mixtral-8x7b-32768'], base: 'https://api.groq.com/openai/v1', hint: 'gsk_…  console.groq.com' },
+    openrouter:  { models: ['anthropic/claude-opus-4-6','openai/gpt-4o','meta-llama/llama-3.3-70b-instruct'], base: 'https://openrouter.ai/api/v1', hint: 'sk-or-…  openrouter.ai/keys' },
+    custom:      { models: [],                                                        base: null,                                   hint: 'Your API key' },
+};
 
+// Active config (saved/loaded from sessionStorage)
+const CFG = { provider:'puter', model:'claude-opus-4-6', key:'', url:'' };
+
+function loadConfig() {
+    try {
+        const s = sessionStorage.getItem('ta_cfg');
+        if (s) Object.assign(CFG, JSON.parse(s));
+    } catch(_) {}
+    applyConfigToUI();
+}
+
+function saveConfig() {
+    CFG.key = document.getElementById('cfg-key')?.value || '';
+    CFG.url = document.getElementById('cfg-url')?.value || '';
+    CFG.model = getCfgModel();
+    try { sessionStorage.setItem('ta_cfg', JSON.stringify(CFG)); } catch(_) {}
+}
+
+function getCfgModel() {
+    if (CFG.provider === 'custom') return document.getElementById('cfg-custom-model')?.value || '';
+    return document.getElementById('cfg-model')?.value || PROV[CFG.provider]?.models[0] || '';
+}
+
+function onProviderChange() {
+    CFG.provider = document.getElementById('cfg-provider').value;
+    applyConfigToUI();
+    saveConfig();
+}
+
+function applyConfigToUI() {
+    const p = CFG.provider;
+    const info = PROV[p] || PROV.puter;
+    document.getElementById('cfg-provider').value = p;
+
+    // Model dropdown
+    const mSel = document.getElementById('cfg-model');
+    const mWrap = document.getElementById('cfg-model-wrap');
+    const cmWrap = document.getElementById('cfg-custom-model-wrap');
+    if (p === 'custom') {
+        mWrap.style.display = 'none';
+        cmWrap.style.display = 'block';
+        document.getElementById('cfg-custom-model').value = CFG.model;
+    } else {
+        mWrap.style.display = 'block';
+        cmWrap.style.display = 'none';
+        mSel.innerHTML = info.models.map(m => `<option value="${m}"${m===CFG.model?' selected':''}>${m}</option>`).join('');
+    }
+
+    // Key / URL inputs
+    const kWrap = document.getElementById('cfg-key-wrap');
+    const uWrap = document.getElementById('cfg-url-wrap');
+    kWrap.style.display = p === 'puter' ? 'none' : 'block';
+    uWrap.style.display = p === 'custom' ? 'block' : 'none';
+    document.getElementById('cfg-key').placeholder = info.hint;
+    document.getElementById('cfg-key').value = CFG.key;
+    document.getElementById('cfg-url').value = CFG.url;
+
+    // Badges
+    const badge = document.getElementById('cfg-summary-badge');
+    const hBadge = document.getElementById('hdr-badge');
+    if (p === 'puter') {
+        badge.className = 'cfg-badge free'; badge.textContent = 'Puter.js · FREE';
+        hBadge.textContent = '⚡ FREE · Puter.js';
+    } else {
+        const label = p === 'custom' ? 'Custom' : ({anthropic:'Anthropic',openai:'OpenAI',groq:'Groq',openrouter:'OpenRouter'}[p]);
+        badge.className = 'cfg-badge key'; badge.textContent = label + ' · API key';
+        hBadge.textContent = '🔑 ' + label;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// AI CALLS — multi-provider
+// ═══════════════════════════════════════════════════════════
 function extractText(r) {
     if (typeof r === 'string') return r;
     if (r?.message?.content?.[0]?.text) return r.message.content[0].text;
@@ -478,28 +608,107 @@ function extractText(r) {
 }
 
 async function aiChat(sys, user) {
-    const msgs = [{ role:'system', content:sys }, { role:'user', content:user }];
-    const r = await puter.ai.chat(msgs, { model: MODEL });
-    return extractText(r);
+    const model = getCfgModel();
+
+    if (CFG.provider === 'puter') {
+        const r = await puter.ai.chat([{role:'system',content:sys},{role:'user',content:user}], {model});
+        return extractText(r);
+    }
+
+    if (CFG.provider === 'anthropic') {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': CFG.key,
+                'anthropic-version': '2023-06-01',
+                'anthropic-dangerous-direct-browser-access': 'true',
+            },
+            body: JSON.stringify({model, max_tokens:3000, system:sys, messages:[{role:'user',content:user}]}),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`);
+        return d.content[0].text;
+    }
+
+    // OpenAI-compatible (openai, groq, openrouter, custom)
+    const base = (CFG.provider === 'custom' ? CFG.url : PROV[CFG.provider]?.base) || 'https://api.openai.com/v1';
+    const r = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+CFG.key},
+        body: JSON.stringify({model, max_tokens:3000, messages:[{role:'system',content:sys},{role:'user',content:user}]}),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || `HTTP ${r.status}`);
+    return d.choices[0].message.content;
 }
 
 async function aiStream(sys, user, onChunk) {
-    const msgs = [{ role:'system', content:sys }, { role:'user', content:user }];
-    let full = '';
-    try {
-        const stream = await puter.ai.chat(msgs, { model: MODEL, stream: true });
-        if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
-            for await (const chunk of stream) {
-                const t = chunk?.text || chunk?.delta?.text || '';
-                if (t) { full += t; onChunk(t); }
+    const model = getCfgModel();
+
+    if (CFG.provider === 'puter') {
+        let full = '';
+        try {
+            const stream = await puter.ai.chat([{role:'system',content:sys},{role:'user',content:user}], {model, stream:true});
+            if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+                for await (const chunk of stream) {
+                    const t = chunk?.text || chunk?.delta?.text || '';
+                    if (t) { full += t; onChunk(t); }
+                }
+                return full;
             }
-            return full;
+        } catch(_) {}
+        const r = await puter.ai.chat([{role:'system',content:sys},{role:'user',content:user}], {model});
+        full = extractText(r); onChunk(full); return full;
+    }
+
+    if (CFG.provider === 'anthropic') {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': CFG.key,
+                'anthropic-version': '2023-06-01',
+                'anthropic-dangerous-direct-browser-access': 'true',
+            },
+            body: JSON.stringify({model, max_tokens:4000, stream:true, system:sys, messages:[{role:'user',content:user}]}),
+        });
+        if (!r.ok) { const d=await r.json(); throw new Error(d.error?.message||`HTTP ${r.status}`); }
+        return parseSSE(r.body, 'anthropic', onChunk);
+    }
+
+    // OpenAI-compatible streaming
+    const base = (CFG.provider === 'custom' ? CFG.url : PROV[CFG.provider]?.base) || 'https://api.openai.com/v1';
+    const r = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+CFG.key},
+        body: JSON.stringify({model, max_tokens:4000, stream:true, messages:[{role:'system',content:sys},{role:'user',content:user}]}),
+    });
+    if (!r.ok) { const d=await r.json(); throw new Error(d.error?.message||`HTTP ${r.status}`); }
+    return parseSSE(r.body, 'openai', onChunk);
+}
+
+async function parseSSE(body, fmt, onChunk) {
+    const reader = body.getReader(), dec = new TextDecoder();
+    let buf = '', full = '';
+    while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream:true});
+        const lines = buf.split('\n'); buf = lines.pop() || '';
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]') return full;
+            try {
+                const obj = JSON.parse(raw);
+                const t = fmt === 'anthropic'
+                    ? (obj.type==='content_block_delta' && obj.delta?.type==='text_delta' ? obj.delta.text : '')
+                    : (obj.choices?.[0]?.delta?.content || '');
+                if (t) { full += t; onChunk(t); }
+            } catch(_) {}
         }
-    } catch (_) {}
-    // Fallback: non-streaming
-    const r = await puter.ai.chat(msgs, { model: MODEL });
-    full = extractText(r);
-    onChunk(full);
+    }
     return full;
 }
 
@@ -873,6 +1082,9 @@ function downloadReport() {
 document.getElementById('ticker').addEventListener('keydown', e => {
     if (e.key==='Enter') startAnalysis();
 });
+
+// ── Init ──────────────────────────────────────────────────
+loadConfig();
 </script>
 </body>
 </html>

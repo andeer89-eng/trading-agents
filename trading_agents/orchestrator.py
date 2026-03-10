@@ -9,9 +9,10 @@ Execution order:
 """
 
 import concurrent.futures
+import os
 import time
-import anthropic
 
+from .llm import LLMClient, PROVIDERS
 from .agents import (
     run_fundamentals_analyst,
     run_sentiment_analyst,
@@ -23,7 +24,8 @@ from .agents import (
     run_portfolio_manager,
 )
 
-# The Portfolio Manager system prompt (from the user's specification)
+# ── Portfolio Manager system prompt ───────────────────────────────────────────
+
 PORTFOLIO_MANAGER_SYSTEM = """You are the **Portfolio Manager & Trading Coordinator** of a sophisticated multi-agent trading system that mirrors real-world trading firms. Your role is to orchestrate specialized analyst and researcher agents to collaboratively evaluate market conditions and make informed trading decisions.
 
 ## Your Role
@@ -74,8 +76,7 @@ Present your final analysis in this structured format:
 - Past performance does not guarantee future results"""
 
 
-def _print_step(step: str, detail: str = ""):
-    """Print a formatted progress step."""
+def _print_step(step: str, detail: str = "") -> None:
     print(f"\n{'─' * 60}")
     print(f"  {step}")
     if detail:
@@ -83,15 +84,15 @@ def _print_step(step: str, detail: str = ""):
     print(f"{'─' * 60}")
 
 
-def run_analyst_parallel(client: anthropic.Anthropic, ticker: str) -> dict:
+def run_analyst_parallel(client: LLMClient, ticker: str) -> dict:
     """Run all four analysts in parallel using a thread pool."""
     _print_step("STEP 1: ANALYST TEAM", f"Deploying 4 analysts for {ticker.upper()} in parallel...")
 
     analyst_fns = {
         "Fundamentals Analyst": run_fundamentals_analyst,
-        "Sentiment Analyst": run_sentiment_analyst,
-        "News Analyst": run_news_analyst,
-        "Technical Analyst": run_technical_analyst,
+        "Sentiment Analyst":    run_sentiment_analyst,
+        "News Analyst":         run_news_analyst,
+        "Technical Analyst":    run_technical_analyst,
     }
 
     reports = {}
@@ -103,8 +104,7 @@ def run_analyst_parallel(client: anthropic.Anthropic, ticker: str) -> dict:
         for future in concurrent.futures.as_completed(futures):
             name = futures[future]
             try:
-                report = future.result()
-                reports[name] = report
+                reports[name] = future.result()
                 print(f"  ✓ {name} completed")
             except Exception as e:
                 reports[name] = f"Error: {e}"
@@ -114,18 +114,15 @@ def run_analyst_parallel(client: anthropic.Anthropic, ticker: str) -> dict:
 
 
 def run_researcher_debate(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     debate_rounds: int = 2,
 ) -> tuple[str, str]:
-    """
-    Run bullish/bearish researcher debate for the specified number of rounds.
-    Returns (final_bull_case, final_bear_case).
-    """
+    """Run bullish/bearish debate for the specified number of rounds."""
     _print_step(
         "STEP 2: RESEARCHER DEBATE",
-        f"Running {debate_rounds} round(s) of bull vs bear debate..."
+        f"Running {debate_rounds} round(s) of bull vs bear debate...",
     )
 
     bull_argument = ""
@@ -134,31 +131,25 @@ def run_researcher_debate(
     for round_num in range(1, debate_rounds + 1):
         print(f"\n  Round {round_num}/{debate_rounds}:")
 
-        print(f"    → Bullish Researcher building case...", end="", flush=True)
-        bull_argument = run_bullish_researcher(
-            client, ticker, analyst_reports, bear_argument, round_num
-        )
+        print("    → Bullish Researcher building case...", end="", flush=True)
+        bull_argument = run_bullish_researcher(client, ticker, analyst_reports, bear_argument, round_num)
         print(" ✓")
 
-        print(f"    → Bearish Researcher countering...", end="", flush=True)
-        bear_argument = run_bearish_researcher(
-            client, ticker, analyst_reports, bull_argument, round_num
-        )
+        print("    → Bearish Researcher countering...", end="", flush=True)
+        bear_argument = run_bearish_researcher(client, ticker, analyst_reports, bull_argument, round_num)
         print(" ✓")
 
     return bull_argument, bear_argument
 
 
 def run_risk_assessment(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     bull_case: str,
     bear_case: str,
 ) -> str:
-    """Run risk manager assessment."""
     _print_step("STEP 3: RISK ASSESSMENT", "Risk Manager evaluating position risk...")
-
     report = run_risk_manager(client, ticker, analyst_reports, bull_case, bear_case)
     print("  ✓ Risk assessment complete")
     return report
@@ -167,44 +158,46 @@ def run_risk_assessment(
 def analyze_ticker(
     ticker: str,
     debate_rounds: int = 2,
+    provider: str = "anthropic",
+    model: str | None = None,
     api_key: str | None = None,
+    base_url: str | None = None,
 ) -> str:
     """
     Full multi-agent trading analysis workflow.
 
     Args:
-        ticker: Stock ticker symbol (e.g. "AAPL", "TSLA")
-        debate_rounds: Number of bull/bear debate rounds (1-3 recommended)
-        api_key: Optional API key override (uses ANTHROPIC_API_KEY env var by default)
+        ticker:        Stock ticker symbol (e.g. "AAPL", "TSLA")
+        debate_rounds: Number of bull/bear debate rounds (1–3 recommended)
+        provider:      AI provider key — "anthropic", "openai", "groq",
+                       "openrouter", or "custom"
+        model:         Model name; defaults to the provider's default model
+        api_key:       API key; falls back to the provider's env-var if omitted
+        base_url:      Custom base URL (only needed for "custom" provider)
 
     Returns:
         The Portfolio Manager's final recommendation string.
     """
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    pinfo   = PROVIDERS.get(provider, PROVIDERS["anthropic"])
+    _model  = model or pinfo["default"]
+    _key    = api_key or os.environ.get(pinfo["key_env"], "")
+
+    client = LLMClient(provider=provider, api_key=_key, model=_model, base_url=base_url)
 
     ticker = ticker.upper().strip()
-    start_time = time.time()
+    start  = time.time()
 
     print(f"\n{'═' * 60}")
     print(f"  TRADING AGENTS — Analysis: {ticker}")
+    print(f"  Provider: {pinfo['label']}  |  Model: {_model}")
     print(f"{'═' * 60}")
 
-    # Step 1: Parallel analyst team
     analyst_reports = run_analyst_parallel(client, ticker)
+    bull_case, bear_case = run_researcher_debate(client, ticker, analyst_reports, debate_rounds)
+    risk_report = run_risk_assessment(client, ticker, analyst_reports, bull_case, bear_case)
 
-    # Step 2: Researcher debate
-    bull_case, bear_case = run_researcher_debate(
-        client, ticker, analyst_reports, debate_rounds=debate_rounds
-    )
-
-    # Step 3: Risk assessment
-    risk_report = run_risk_assessment(
-        client, ticker, analyst_reports, bull_case, bear_case
-    )
-
-    # Step 4: Portfolio Manager final synthesis (streamed)
     _print_step("STEP 4: PORTFOLIO MANAGER", "Synthesizing final recommendation (streaming)...")
-    final_recommendation = run_portfolio_manager(
+    final = run_portfolio_manager(
         client=client,
         ticker=ticker,
         analyst_reports=analyst_reports,
@@ -214,9 +207,8 @@ def analyze_ticker(
         system_prompt=PORTFOLIO_MANAGER_SYSTEM,
     )
 
-    elapsed = time.time() - start_time
     print(f"\n{'═' * 60}")
-    print(f"  Analysis complete in {elapsed:.1f}s")
+    print(f"  Analysis complete in {time.time() - start:.1f}s")
     print(f"{'═' * 60}\n")
 
-    return final_recommendation
+    return final

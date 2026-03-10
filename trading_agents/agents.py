@@ -1,161 +1,119 @@
 """
 Individual agent implementations.
-Each agent runs an agentic tool-use loop and returns a structured report string.
+
+Each agent pre-fetches the market data it needs via tools.py, then calls the
+LLM with that data as context.  This approach works with any provider
+(Anthropic, OpenAI, Groq, OpenRouter, or any OpenAI-compatible endpoint)
+because it requires only a standard chat-completion interface — no tool-use
+loop needed.
 """
 
+from __future__ import annotations
+
 from typing import Generator
-import anthropic
+
+from .llm import LLMClient
 from .tools import (
-    execute_tool,
-    FUNDAMENTALS_TOOLS,
-    SENTIMENT_TOOLS,
-    NEWS_TOOLS,
-    TECHNICAL_TOOLS,
+    get_company_info,
+    get_financials,
+    get_balance_sheet,
+    get_analyst_ratings,
+    get_market_sentiment,
+    get_news,
+    get_technical_indicators,
+    get_price_history,
 )
 
-MODEL = "claude-opus-4-6"
 
+# ── Analyst Agents ─────────────────────────────────────────────────────────────
 
-def _run_tool_loop(
-    client: anthropic.Anthropic,
-    system: str,
-    user_message: str,
-    tools: list,
-    max_tokens: int = 3000,
-) -> str:
-    """
-    Core agentic loop: run Claude with tools until it produces a final text response.
-    Returns the final text output.
-    """
-    messages = [{"role": "user", "content": user_message}]
+def run_fundamentals_analyst(client: LLMClient, ticker: str) -> str:
+    data = "\n\n".join([
+        f"=== COMPANY INFO ===\n{get_company_info(ticker)}",
+        f"=== FINANCIAL RATIOS & INCOME ===\n{get_financials(ticker)}",
+        f"=== BALANCE SHEET ===\n{get_balance_sheet(ticker)}",
+        f"=== ANALYST RATINGS ===\n{get_analyst_ratings(ticker)}",
+    ])
 
-    while True:
-        kwargs = dict(
-            model=MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=messages,
-        )
-        if tools:
-            kwargs["tools"] = tools
-        response = client.messages.create(**kwargs)
-
-        if response.stop_reason == "end_turn":
-            # Extract text blocks (skip thinking blocks)
-            parts = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(parts) if parts else "No report generated."
-
-        if response.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": response.content})
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = execute_tool(block.name, block.input)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            # Unexpected stop reason — return whatever text we have
-            parts = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(parts) if parts else f"Stopped: {response.stop_reason}"
-
-
-# ─── Analyst Agents ───────────────────────────────────────────────────────────
-
-def run_fundamentals_analyst(client: anthropic.Anthropic, ticker: str) -> str:
     system = """You are a CFA-level Fundamentals Analyst at a top-tier investment firm.
 
-Your job is to assess a company's intrinsic value through rigorous financial analysis.
+Assess the company's intrinsic value using the provided market data.
 
-Use the available tools to gather: company overview, key financial ratios (P/E, PEG, margins,
-growth rates), balance sheet health (debt, cash, liquidity), and analyst price targets.
-
-Produce a comprehensive fundamentals report that covers:
+Produce a comprehensive report covering:
 1. Business overview and competitive position
-2. Valuation assessment (is the stock cheap, fair, or expensive vs peers/history?)
+2. Valuation assessment (cheap, fair, or expensive vs peers/history?)
 3. Financial health (profitability, margins, growth trajectory)
 4. Balance sheet strength (debt load, cash position, liquidity)
 5. Analyst consensus and price target implied upside/downside
 6. Overall signal: BULLISH / NEUTRAL / BEARISH with key reasoning
 
-Be specific with numbers. Format your report clearly with section headers."""
+Be specific with numbers. Format with clear section headers."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=f"Conduct a comprehensive fundamental analysis of {ticker.upper()}.",
-        tools=FUNDAMENTALS_TOOLS,
+    return client.chat(
+        system,
+        f"Conduct a comprehensive fundamental analysis of {ticker.upper()}.\n\n{data}",
         max_tokens=3000,
     )
 
 
-def run_sentiment_analyst(client: anthropic.Anthropic, ticker: str) -> str:
-    system = """You are a Market Sentiment Analyst specializing in crowd psychology and
-positioning data.
+def run_sentiment_analyst(client: LLMClient, ticker: str) -> str:
+    data = "\n\n".join([
+        f"=== MARKET SENTIMENT ===\n{get_market_sentiment(ticker)}",
+        f"=== RECENT NEWS ===\n{get_news(ticker)}",
+        f"=== ANALYST RATINGS ===\n{get_analyst_ratings(ticker)}",
+    ])
 
-Use the available tools to analyze: short interest (bearish positioning), institutional vs
-retail ownership, insider activity, recent news sentiment, and analyst rating trends.
+    system = """You are a Market Sentiment Analyst specializing in crowd psychology and positioning data.
 
 Produce a sentiment report covering:
-1. Short interest analysis — are bears heavily positioned? Any short squeeze risk?
+1. Short interest analysis — heavy bearish positioning? Any short squeeze risk?
 2. Institutional/insider ownership trends — smart money moving in or out?
 3. News sentiment — is coverage positive, negative, or mixed?
 4. Overall market mood around this stock
 5. Sentiment signal: BULLISH / NEUTRAL / BEARISH with key reasoning
 
-Interpret the data through the lens of market psychology and contrarian signals."""
+Interpret data through market psychology and contrarian signals."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=f"Analyze market sentiment for {ticker.upper()}.",
-        tools=SENTIMENT_TOOLS,
+    return client.chat(
+        system,
+        f"Analyze market sentiment for {ticker.upper()}.\n\n{data}",
         max_tokens=2500,
     )
 
 
-def run_news_analyst(client: anthropic.Anthropic, ticker: str) -> str:
+def run_news_analyst(client: LLMClient, ticker: str) -> str:
+    data = "\n\n".join([
+        f"=== COMPANY CONTEXT ===\n{get_company_info(ticker)}",
+        f"=== NEWS & ARTICLES ===\n{get_news(ticker)}",
+    ])
+
     system = """You are a News & Macro Analyst at a hedge fund.
 
-Use the available tools to pull recent news and company context, then assess the impact of:
-- Recent company-specific news (earnings, product launches, management changes, legal issues)
-- Macro and sector tailwinds/headwinds
-- Geopolitical or regulatory risks
-- Any event-driven catalysts (upcoming earnings, FDA decisions, contract wins, etc.)
-
 Produce a news impact report covering:
-1. Top 3-5 most important recent news items and their market impact
+1. Top 3–5 most important recent news items and their market impact
 2. Upcoming catalysts or risk events
-3. Macro/sector context
+3. Macro/sector context and tailwinds/headwinds
 4. News signal: BULLISH / NEUTRAL / BEARISH with key reasoning
 
-Be concise and focus on what matters for the next 3-6 months."""
+Be concise; focus on what matters for the next 3–6 months."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=f"Analyze recent news and catalysts for {ticker.upper()}.",
-        tools=NEWS_TOOLS,
+    return client.chat(
+        system,
+        f"Analyze recent news and catalysts for {ticker.upper()}.\n\n{data}",
         max_tokens=2500,
     )
 
 
-def run_technical_analyst(client: anthropic.Anthropic, ticker: str) -> str:
-    system = """You are a Technical Analyst with 15 years of experience in price action and
-quantitative signals.
+def run_technical_analyst(client: LLMClient, ticker: str) -> str:
+    data = "\n\n".join([
+        f"=== TECHNICAL INDICATORS ===\n{get_technical_indicators(ticker)}",
+        f"=== PRICE HISTORY (3 months) ===\n{get_price_history(ticker, period='3mo')}",
+    ])
 
-Use the available tools to fetch price history and calculate technical indicators, then analyze:
-- Trend structure (moving averages: 20/50/200-day alignment)
-- Momentum (RSI: overbought/oversold; MACD: bullish/bearish cross)
-- Volatility (Bollinger Bands: squeeze, breakout)
-- Volume patterns (confirming or diverging from price)
-- Key support and resistance levels
+    system = """You are a Technical Analyst with 15 years of experience in price action and quantitative signals.
 
 Produce a technical analysis report covering:
-1. Trend assessment — is the stock in an uptrend, downtrend, or ranging?
+1. Trend assessment — uptrend, downtrend, or ranging? (moving average alignment)
 2. Momentum signals — RSI and MACD interpretation
 3. Key price levels — support, resistance, and potential targets
 4. Volume confirmation
@@ -163,54 +121,48 @@ Produce a technical analysis report covering:
 
 Be specific about price levels and indicator readings."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=f"Conduct technical analysis of {ticker.upper()}.",
-        tools=TECHNICAL_TOOLS,
+    return client.chat(
+        system,
+        f"Conduct technical analysis of {ticker.upper()}.\n\n{data}",
         max_tokens=2500,
     )
 
 
-# ─── Researcher Agents (debate) ───────────────────────────────────────────────
+# ── Researcher Agents (debate) ─────────────────────────────────────────────────
 
 def run_bullish_researcher(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     bear_argument: str = "",
     round_num: int = 1,
 ) -> str:
-    """Build the bull case, optionally countering the bear argument."""
     reports_text = "\n\n".join(
         f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
     )
-
-    counter_section = ""
+    counter = ""
     if bear_argument:
-        counter_section = f"""
-The bearish researcher has made the following argument — you must rebut their key points:
+        counter = f"""
+The bearish researcher has made the following argument — rebut their key points with evidence:
 
 --- BEAR ARGUMENT (Round {round_num - 1}) ---
 {bear_argument}
---- END BEAR ARGUMENT ---
+--- END ---
 
-In your response, first rebut the bear's strongest points with evidence, then reinforce
-the bull case."""
+First rebut the bear's strongest points, then reinforce the bull case."""
 
     system = """You are the Bullish Researcher at a long/short equity hedge fund.
 Your role is to construct the strongest possible BULL case for a stock investment.
 
-You are rigorous, data-driven, and persuasive. You draw on the analyst reports provided
-and identify the most compelling reasons to BUY the stock. You acknowledge risks but
-explain why the upside opportunity outweighs them."""
+You are rigorous, data-driven, and persuasive. Draw on analyst reports to identify
+compelling reasons to BUY. Acknowledge risks but explain why upside outweighs them."""
 
-    user_message = f"""Build the bull case for {ticker.upper()} using these analyst reports:
+    user = f"""Build the bull case for {ticker.upper()} using these analyst reports:
 
 {reports_text}
-{counter_section}
+{counter}
 
-Provide a structured bull thesis covering:
+Provide a structured bull thesis:
 1. Core investment thesis (why this stock should appreciate)
 2. Key financial/fundamental strengths
 3. Technical setup supporting entry
@@ -220,53 +172,44 @@ Provide a structured bull thesis covering:
 
 Be specific, data-driven, and persuasive."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=user_message,
-        tools=[],  # Researchers debate without new data
-        max_tokens=2500,
-    )
+    return client.chat(system, user, max_tokens=2500)
 
 
 def run_bearish_researcher(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     bull_argument: str = "",
     round_num: int = 1,
 ) -> str:
-    """Build the bear case, optionally countering the bull argument."""
     reports_text = "\n\n".join(
         f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
     )
-
-    counter_section = ""
+    counter = ""
     if bull_argument:
-        counter_section = f"""
-The bullish researcher has made the following argument — you must rebut their key points:
+        counter = f"""
+The bullish researcher has made the following argument — dismantle their key assumptions:
 
 --- BULL ARGUMENT (Round {round_num}) ---
 {bull_argument}
---- END BULL ARGUMENT ---
+--- END ---
 
-In your response, first dismantle the bull's key assumptions, then reinforce the bear case."""
+First dismantle the bull's key assumptions, then reinforce the bear case."""
 
     system = """You are the Bearish Researcher at a long/short equity hedge fund.
 Your role is to construct the strongest possible BEAR case — identifying overvaluation,
 risks, red flags, and downside scenarios.
 
-You are skeptical, rigorous, and contrarian. You identify what the market might be
-missing or overpaying for. You are not reflexively negative — you are analytically
-rigorous in finding real risks."""
+You are skeptical, rigorous, and contrarian. Identify what the market might be
+missing or overpaying for. Not reflexively negative — analytically rigorous."""
 
-    user_message = f"""Build the bear case for {ticker.upper()} using these analyst reports:
+    user = f"""Build the bear case for {ticker.upper()} using these analyst reports:
 
 {reports_text}
-{counter_section}
+{counter}
 
-Provide a structured bear thesis covering:
-1. Core concern (why this stock is risky or overvalued)
+Provide a structured bear thesis:
+1. Core concern / overvaluation risk
 2. Financial/fundamental weaknesses or red flags
 3. Technical warning signals or unfavorable setup
 4. Macro or sector headwinds
@@ -275,19 +218,13 @@ Provide a structured bear thesis covering:
 
 Be specific, evidence-based, and analytically rigorous."""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=user_message,
-        tools=[],
-        max_tokens=2500,
-    )
+    return client.chat(system, user, max_tokens=2500)
 
 
-# ─── Risk Manager ─────────────────────────────────────────────────────────────
+# ── Risk Manager ───────────────────────────────────────────────────────────────
 
 def run_risk_manager(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     bull_case: str,
@@ -300,15 +237,11 @@ def run_risk_manager(
     system = """You are the Chief Risk Officer at a multi-strategy hedge fund.
 Your role is to independently assess the risk/reward profile of a proposed trade.
 
-You are NOT here to make a directional call — you are here to quantify and contextualize
-risk so the Portfolio Manager can make an informed decision. You focus on:
-- Volatility and drawdown potential
-- Liquidity risk
-- Concentration risk
-- Macro/tail risks
-- Position sizing recommendation"""
+You are NOT making a directional call — you quantify and contextualize risk so the
+Portfolio Manager can decide. Focus on: volatility, drawdown potential, liquidity,
+concentration risk, macro/tail risks, and position sizing."""
 
-    user_message = f"""Conduct a risk assessment for a potential position in {ticker.upper()}.
+    user = f"""Conduct a risk assessment for a potential position in {ticker.upper()}.
 
 === ANALYST REPORTS ===
 {all_context}
@@ -323,90 +256,18 @@ Provide a risk assessment covering:
 1. Volatility profile (historical beta, implied move range)
 2. Key risk factors (company-specific, sector, macro)
 3. Liquidity assessment (can we enter/exit efficiently?)
-4. Suggested position sizing (% of portfolio) given risk level
+4. Suggested position sizing (% of portfolio)
 5. Stop-loss level recommendation
 6. Risk/reward ratio assessment
 7. Overall risk rating: LOW / MEDIUM / HIGH / VERY HIGH"""
 
-    return _run_tool_loop(
-        client,
-        system=system,
-        user_message=user_message,
-        tools=[],
-        max_tokens=2000,
-    )
+    return client.chat(system, user, max_tokens=2000)
 
 
-# ─── Portfolio Manager (final synthesis) ──────────────────────────────────────
-
-def run_portfolio_manager(
-    client: anthropic.Anthropic,
-    ticker: str,
-    analyst_reports: dict,
-    bull_case: str,
-    bear_case: str,
-    risk_report: str,
-    system_prompt: str,
-) -> str:
-    """
-    The Portfolio Manager synthesizes all inputs and streams the final trading decision.
-    Returns the final recommendation as a string.
-    """
-    all_analyst = "\n\n".join(
-        f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
-    )
-
-    user_message = f"""You have received comprehensive analysis for {ticker.upper()}.
-Make your final trading recommendation.
-
-{'=' * 60}
-ANALYST REPORTS
-{'=' * 60}
-{all_analyst}
-
-{'=' * 60}
-BULL CASE (Bullish Researcher)
-{'=' * 60}
-{bull_case}
-
-{'=' * 60}
-BEAR CASE (Bearish Researcher)
-{'=' * 60}
-{bear_case}
-
-{'=' * 60}
-RISK ASSESSMENT (Risk Manager)
-{'=' * 60}
-{risk_report}
-{'=' * 60}
-
-Now synthesize all of this into your final recommendation using the structured output
-format specified in your role. Be decisive and back your recommendation with the
-strongest evidence from the analysis above."""
-
-    # Stream the portfolio manager's final synthesis
-    full_response = []
-    print("\n" + "=" * 60)
-    print("  PORTFOLIO MANAGER SYNTHESIS")
-    print("=" * 60 + "\n")
-
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=4000,
-        thinking={"type": "adaptive"},
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            full_response.append(text)
-
-    print("\n")
-    return "".join(full_response)
-
+# ── Portfolio Manager ──────────────────────────────────────────────────────────
 
 def stream_portfolio_manager(
-    client: anthropic.Anthropic,
+    client: LLMClient,
     ticker: str,
     analyst_reports: dict,
     bull_case: str,
@@ -414,48 +275,53 @@ def stream_portfolio_manager(
     risk_report: str,
     system_prompt: str,
 ) -> Generator[str, None, None]:
-    """
-    Generator variant of run_portfolio_manager for use with Streamlit st.write_stream.
-    Yields text chunks as they arrive from the Claude streaming API.
-    """
+    """Generator variant for use with Streamlit st.write_stream; yields text chunks."""
     all_analyst = "\n\n".join(
         f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
     )
+    sep = "=" * 60
 
-    user_message = f"""You have received comprehensive analysis for {ticker.upper()}.
+    user = f"""You have received comprehensive analysis for {ticker.upper()}.
 Make your final trading recommendation.
 
-{'=' * 60}
+{sep}
 ANALYST REPORTS
-{'=' * 60}
+{sep}
 {all_analyst}
 
-{'=' * 60}
-BULL CASE (Bullish Researcher)
-{'=' * 60}
+{sep}
+BULL CASE
+{sep}
 {bull_case}
 
-{'=' * 60}
-BEAR CASE (Bearish Researcher)
-{'=' * 60}
+{sep}
+BEAR CASE
+{sep}
 {bear_case}
 
-{'=' * 60}
-RISK ASSESSMENT (Risk Manager)
-{'=' * 60}
+{sep}
+RISK ASSESSMENT
+{sep}
 {risk_report}
-{'=' * 60}
 
-Now synthesize all of this into your final recommendation using the structured output
-format specified in your role. Be decisive and back your recommendation with the
-strongest evidence from the analysis above."""
+Synthesize all of this into your final recommendation. Be decisive and back your
+recommendation with the strongest evidence from the analysis above."""
 
-    with client.messages.stream(
-        model=MODEL,
-        max_tokens=4000,
-        thinking={"type": "adaptive"},
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            yield text
+    yield from client.stream(system_prompt, user, max_tokens=4000)
+
+
+def run_portfolio_manager(
+    client: LLMClient,
+    ticker: str,
+    analyst_reports: dict,
+    bull_case: str,
+    bear_case: str,
+    risk_report: str,
+    system_prompt: str,
+) -> str:
+    """Non-streaming variant used by the CLI orchestrator."""
+    return "".join(
+        stream_portfolio_manager(
+            client, ticker, analyst_reports, bull_case, bear_case, risk_report, system_prompt
+        )
+    )
