@@ -84,8 +84,8 @@ with st.sidebar:
     debate_rounds = st.select_slider(
         "Debate Rounds",
         options=[1, 2, 3],
-        value=2,
-        help="More rounds = deeper debate, but slower",
+        value=1,
+        help="1 round = fast & cheap (~$0.10). More rounds = deeper debate but higher cost.",
     )
 
     st.divider()
@@ -307,11 +307,11 @@ if all(r.startswith("[Analysis") for r in analyst_reports.values()):
     st.error("All analysts failed. Check your API key and model name.")
     st.stop()
 
-st.markdown("**Analyst Reports:**")
-tabs = st.tabs([f"{analyst_icons[n]} {n}" for n in analyst_reports])
-for tab, (name, report) in zip(tabs, analyst_reports.items()):
-    with tab:
-        st.markdown(report)
+with st.expander("📋 Analyst Reports", expanded=False):
+    tabs = st.tabs([f"{analyst_icons[n]} {n}" for n in analyst_reports])
+    for tab, (name, report) in zip(tabs, analyst_reports.items()):
+        with tab:
+            st.markdown(report)
 
 st.divider()
 
@@ -345,10 +345,10 @@ for round_num in range(1, debate_rounds + 1):
 
 col_bull, col_bear = st.columns(2)
 with col_bull:
-    with st.expander("🟢 Bull Case", expanded=True):
+    with st.expander("🟢 Bull Case", expanded=False):
         st.markdown(bull_argument)
 with col_bear:
-    with st.expander("🔴 Bear Case", expanded=True):
+    with st.expander("🔴 Bear Case", expanded=False):
         st.markdown(bear_argument)
 
 st.divider()
@@ -368,7 +368,7 @@ with st.status("⚠️ Risk Manager assessing position risk...", expanded=False)
         st.error(f"Risk Manager failed: {e}")
         st.stop()
 
-with st.expander("📋 Risk Report"):
+with st.expander("⚠️ Risk Report", expanded=False):
     st.markdown(risk_report)
 
 st.divider()
@@ -485,13 +485,28 @@ with dl_col2:
         story.append(Paragraph(f"Generated: {_dt.now().strftime('%Y-%m-%d %H:%M')}", body_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.grey, spaceAfter=10))
 
+        import re as _re
+
+        def _md_to_para(text: str, style) -> list:
+            """Convert a line of markdown to a ReportLab Paragraph."""
+            # Bold: **text** → <b>text</b>
+            text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+            # Strip leading markdown bullets/hashes
+            text = _re.sub(r'^#+\s*', '', text)
+            text = _re.sub(r'^[-•*]\s*', '• ', text)
+            text = text.strip()
+            if not text:
+                return []
+            try:
+                return [Paragraph(text, style)]
+            except Exception:
+                return [Paragraph(text.encode('ascii', 'replace').decode(), style)]
+
         def _add_section(heading: str, content: str):
             story.append(Paragraph(heading, h2_style))
-            for para in content.split("\n\n"):
-                clean = para.strip().replace("**", "").replace("##", "").replace("#", "")
-                if clean:
-                    story.append(Paragraph(clean, body_style))
-            story.append(Spacer(1, 6))
+            for line in content.split("\n"):
+                story.extend(_md_to_para(line, body_style))
+            story.append(Spacer(1, 8))
 
         for name, report in analyst_reports.items():
             _add_section(name, report)

@@ -25,6 +25,17 @@ from .tools import (
 )
 
 
+def _condense_reports(analyst_reports: dict, max_chars: int = 600) -> str:
+    """Truncate analyst reports to keep downstream prompts short."""
+    lines = []
+    for name, report in analyst_reports.items():
+        snippet = report[:max_chars].strip()
+        if len(report) > max_chars:
+            snippet += "…"
+        lines.append(f"[{name}]\n{snippet}")
+    return "\n\n".join(lines)
+
+
 # ── Analyst Agents ─────────────────────────────────────────────────────────────
 
 def run_fundamentals_analyst(client: LLMClient, ticker: str) -> str:
@@ -35,24 +46,21 @@ def run_fundamentals_analyst(client: LLMClient, ticker: str) -> str:
         f"=== ANALYST RATINGS ===\n{get_analyst_ratings(ticker)}",
     ])
 
-    system = """You are a CFA-level Fundamentals Analyst at a top-tier investment firm.
+    system = """You are a CFA-level Fundamentals Analyst. Be concise and data-driven.
 
-Assess the company's intrinsic value using the provided market data.
+Produce a SHORT structured report using bullet points:
+• **Valuation** — cheap / fair / expensive vs peers (cite 2-3 key multiples)
+• **Financial Health** — margins, growth, profitability (1-2 bullets)
+• **Balance Sheet** — debt, cash, liquidity (1 bullet)
+• **Analyst Consensus** — rating, price target, implied upside (1 bullet)
+• **Signal: BULLISH / NEUTRAL / BEARISH** — one-sentence reason
 
-Produce a comprehensive report covering:
-1. Business overview and competitive position
-2. Valuation assessment (cheap, fair, or expensive vs peers/history?)
-3. Financial health (profitability, margins, growth trajectory)
-4. Balance sheet strength (debt load, cash position, liquidity)
-5. Analyst consensus and price target implied upside/downside
-6. Overall signal: BULLISH / NEUTRAL / BEARISH with key reasoning
-
-Be specific with numbers. Format with clear section headers."""
+Max 300 words. Numbers only where relevant."""
 
     return client.chat(
         system,
-        f"Conduct a comprehensive fundamental analysis of {ticker.upper()}.\n\n{data}",
-        max_tokens=3000,
+        f"Fundamental analysis of {ticker.upper()}.\n\n{data}",
+        max_tokens=700,
     )
 
 
@@ -63,21 +71,20 @@ def run_sentiment_analyst(client: LLMClient, ticker: str) -> str:
         f"=== ANALYST RATINGS ===\n{get_analyst_ratings(ticker)}",
     ])
 
-    system = """You are a Market Sentiment Analyst specializing in crowd psychology and positioning data.
+    system = """You are a Market Sentiment Analyst. Be concise and data-driven.
 
-Produce a sentiment report covering:
-1. Short interest analysis — heavy bearish positioning? Any short squeeze risk?
-2. Institutional/insider ownership trends — smart money moving in or out?
-3. News sentiment — is coverage positive, negative, or mixed?
-4. Overall market mood around this stock
-5. Sentiment signal: BULLISH / NEUTRAL / BEARISH with key reasoning
+Produce a SHORT structured report using bullet points:
+• **Short Interest** — bearish positioning or squeeze risk (1 bullet)
+• **Ownership Trends** — institutions/insiders moving in or out (1 bullet)
+• **News Sentiment** — positive, negative, or mixed (1 bullet)
+• **Signal: BULLISH / NEUTRAL / BEARISH** — one-sentence reason
 
-Interpret data through market psychology and contrarian signals."""
+Max 200 words."""
 
     return client.chat(
         system,
-        f"Analyze market sentiment for {ticker.upper()}.\n\n{data}",
-        max_tokens=2500,
+        f"Sentiment analysis for {ticker.upper()}.\n\n{data}",
+        max_tokens=500,
     )
 
 
@@ -87,20 +94,20 @@ def run_news_analyst(client: LLMClient, ticker: str) -> str:
         f"=== NEWS & ARTICLES ===\n{get_news(ticker)}",
     ])
 
-    system = """You are a News & Macro Analyst at a hedge fund.
+    system = """You are a News & Catalyst Analyst. Be concise.
 
-Produce a news impact report covering:
-1. Top 3–5 most important recent news items and their market impact
-2. Upcoming catalysts or risk events
-3. Macro/sector context and tailwinds/headwinds
-4. News signal: BULLISH / NEUTRAL / BEARISH with key reasoning
+Produce a SHORT structured report using bullet points:
+• **Top 3 News Items** — title + one-line impact each
+• **Upcoming Catalysts** — 1-2 bullets
+• **Macro/Sector Context** — 1 bullet
+• **Signal: BULLISH / NEUTRAL / BEARISH** — one-sentence reason
 
-Be concise; focus on what matters for the next 3–6 months."""
+Max 200 words."""
 
     return client.chat(
         system,
-        f"Analyze recent news and catalysts for {ticker.upper()}.\n\n{data}",
-        max_tokens=2500,
+        f"News and catalyst analysis for {ticker.upper()}.\n\n{data}",
+        max_tokens=500,
     )
 
 
@@ -110,21 +117,21 @@ def run_technical_analyst(client: LLMClient, ticker: str) -> str:
         f"=== PRICE HISTORY (3 months) ===\n{get_price_history(ticker, period='3mo')}",
     ])
 
-    system = """You are a Technical Analyst with 15 years of experience in price action and quantitative signals.
+    system = """You are a Technical Analyst. Be concise and specific with price levels.
 
-Produce a technical analysis report covering:
-1. Trend assessment — uptrend, downtrend, or ranging? (moving average alignment)
-2. Momentum signals — RSI and MACD interpretation
-3. Key price levels — support, resistance, and potential targets
-4. Volume confirmation
-5. Technical signal: BULLISH / NEUTRAL / BEARISH with key reasoning
+Produce a SHORT structured report using bullet points:
+• **Trend** — uptrend / downtrend / ranging (cite MA alignment)
+• **Momentum** — RSI and MACD reading (specific numbers)
+• **Key Levels** — support and resistance prices
+• **Volume** — confirming or diverging
+• **Signal: BULLISH / NEUTRAL / BEARISH** — one-sentence reason
 
-Be specific about price levels and indicator readings."""
+Max 200 words."""
 
     return client.chat(
         system,
-        f"Conduct technical analysis of {ticker.upper()}.\n\n{data}",
-        max_tokens=2500,
+        f"Technical analysis of {ticker.upper()}.\n\n{data}",
+        max_tokens=500,
     )
 
 
@@ -137,42 +144,27 @@ def run_bullish_researcher(
     bear_argument: str = "",
     round_num: int = 1,
 ) -> str:
-    reports_text = "\n\n".join(
-        f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
-    )
+    summary = _condense_reports(analyst_reports, max_chars=500)
     counter = ""
     if bear_argument:
-        counter = f"""
-The bearish researcher has made the following argument — rebut their key points with evidence:
+        bear_snippet = bear_argument[:600].strip()
+        if len(bear_argument) > 600:
+            bear_snippet += "…"
+        counter = f"\n\nBEAR ARGUMENT TO REBUT:\n{bear_snippet}\nRebut the 2 strongest bear points, then reinforce the bull case."
 
---- BEAR ARGUMENT (Round {round_num - 1}) ---
-{bear_argument}
---- END ---
+    system = """You are the Bullish Researcher at a hedge fund. Be concise and data-driven.
 
-First rebut the bear's strongest points, then reinforce the bull case."""
+Build the bull case in bullet-point format:
+• **Core Thesis** — why this stock should appreciate (2 bullets max)
+• **Key Strengths** — financial or fundamental (2 bullets)
+• **Catalysts** — what could drive it higher (2 bullets)
+• **Rebuttal** — address bear concerns if applicable (1-2 bullets)
+• **Price Target** — expected return
 
-    system = """You are the Bullish Researcher at a long/short equity hedge fund.
-Your role is to construct the strongest possible BULL case for a stock investment.
+Max 250 words."""
 
-You are rigorous, data-driven, and persuasive. Draw on analyst reports to identify
-compelling reasons to BUY. Acknowledge risks but explain why upside outweighs them."""
-
-    user = f"""Build the bull case for {ticker.upper()} using these analyst reports:
-
-{reports_text}
-{counter}
-
-Provide a structured bull thesis:
-1. Core investment thesis (why this stock should appreciate)
-2. Key financial/fundamental strengths
-3. Technical setup supporting entry
-4. Catalysts that could drive the stock higher
-5. Rebuttal of the bear case (if applicable)
-6. Price target and expected return
-
-Be specific, data-driven, and persuasive."""
-
-    return client.chat(system, user, max_tokens=2500)
+    user = f"Bull case for {ticker.upper()}:\n\n{summary}{counter}"
+    return client.chat(system, user, max_tokens=700)
 
 
 def run_bearish_researcher(
@@ -182,43 +174,27 @@ def run_bearish_researcher(
     bull_argument: str = "",
     round_num: int = 1,
 ) -> str:
-    reports_text = "\n\n".join(
-        f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
-    )
+    summary = _condense_reports(analyst_reports, max_chars=500)
     counter = ""
     if bull_argument:
-        counter = f"""
-The bullish researcher has made the following argument — dismantle their key assumptions:
+        bull_snippet = bull_argument[:600].strip()
+        if len(bull_argument) > 600:
+            bull_snippet += "…"
+        counter = f"\n\nBULL ARGUMENT TO COUNTER:\n{bull_snippet}\nDismantle the 2 strongest bull points, then reinforce the bear case."
 
---- BULL ARGUMENT (Round {round_num}) ---
-{bull_argument}
---- END ---
+    system = """You are the Bearish Researcher at a hedge fund. Be concise and analytically rigorous.
 
-First dismantle the bull's key assumptions, then reinforce the bear case."""
+Build the bear case in bullet-point format:
+• **Core Risk** — overvaluation or key concern (2 bullets max)
+• **Weaknesses** — financial or fundamental red flags (2 bullets)
+• **Headwinds** — macro or sector risks (1-2 bullets)
+• **Rebuttal** — dismantle bull assumptions if applicable (1-2 bullets)
+• **Downside Target** — expected drawdown
 
-    system = """You are the Bearish Researcher at a long/short equity hedge fund.
-Your role is to construct the strongest possible BEAR case — identifying overvaluation,
-risks, red flags, and downside scenarios.
+Max 250 words."""
 
-You are skeptical, rigorous, and contrarian. Identify what the market might be
-missing or overpaying for. Not reflexively negative — analytically rigorous."""
-
-    user = f"""Build the bear case for {ticker.upper()} using these analyst reports:
-
-{reports_text}
-{counter}
-
-Provide a structured bear thesis:
-1. Core concern / overvaluation risk
-2. Financial/fundamental weaknesses or red flags
-3. Technical warning signals or unfavorable setup
-4. Macro or sector headwinds
-5. Rebuttal of the bull case (if applicable)
-6. Downside scenario and price target
-
-Be specific, evidence-based, and analytically rigorous."""
-
-    return client.chat(system, user, max_tokens=2500)
+    user = f"Bear case for {ticker.upper()}:\n\n{summary}{counter}"
+    return client.chat(system, user, max_tokens=700)
 
 
 # ── Risk Manager ───────────────────────────────────────────────────────────────
@@ -230,38 +206,32 @@ def run_risk_manager(
     bull_case: str,
     bear_case: str,
 ) -> str:
-    all_context = "\n\n".join(
-        f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
-    )
+    summary = _condense_reports(analyst_reports, max_chars=400)
+    bull_snippet = bull_case[:400].strip()
+    bear_snippet = bear_case[:400].strip()
 
-    system = """You are the Chief Risk Officer at a multi-strategy hedge fund.
-Your role is to independently assess the risk/reward profile of a proposed trade.
+    system = """You are the Chief Risk Officer. Be concise.
 
-You are NOT making a directional call — you quantify and contextualize risk so the
-Portfolio Manager can decide. Focus on: volatility, drawdown potential, liquidity,
-concentration risk, macro/tail risks, and position sizing."""
+Risk assessment in bullet-point format:
+• **Volatility** — beta, historical range (1 bullet)
+• **Key Risks** — top 3 risks (company, sector, macro)
+• **Liquidity** — can we enter/exit efficiently? (1 bullet)
+• **Position Sizing** — suggested % of portfolio
+• **Stop-Loss** — recommended level
+• **Risk Rating: LOW / MEDIUM / HIGH / VERY HIGH**
 
-    user = f"""Conduct a risk assessment for a potential position in {ticker.upper()}.
+Max 200 words."""
 
-=== ANALYST REPORTS ===
-{all_context}
+    user = f"""Risk assessment for {ticker.upper()}.
 
-=== BULL CASE ===
-{bull_case}
+ANALYST SUMMARY:
+{summary}
 
-=== BEAR CASE ===
-{bear_case}
+BULL CASE: {bull_snippet}
 
-Provide a risk assessment covering:
-1. Volatility profile (historical beta, implied move range)
-2. Key risk factors (company-specific, sector, macro)
-3. Liquidity assessment (can we enter/exit efficiently?)
-4. Suggested position sizing (% of portfolio)
-5. Stop-loss level recommendation
-6. Risk/reward ratio assessment
-7. Overall risk rating: LOW / MEDIUM / HIGH / VERY HIGH"""
+BEAR CASE: {bear_snippet}"""
 
-    return client.chat(system, user, max_tokens=2000)
+    return client.chat(system, user, max_tokens=500)
 
 
 # ── Portfolio Manager ──────────────────────────────────────────────────────────
@@ -276,38 +246,38 @@ def stream_portfolio_manager(
     system_prompt: str,
 ) -> Generator[str, None, None]:
     """Generator variant for use with Streamlit st.write_stream; yields text chunks."""
-    all_analyst = "\n\n".join(
-        f"=== {name} ===\n{report}" for name, report in analyst_reports.items()
-    )
-    sep = "=" * 60
+    summary = _condense_reports(analyst_reports, max_chars=400)
 
-    user = f"""You have received comprehensive analysis for {ticker.upper()}.
-Make your final trading recommendation.
+    user = f"""Final trading recommendation for {ticker.upper()}.
 
-{sep}
-ANALYST REPORTS
-{sep}
-{all_analyst}
+ANALYST SIGNALS:
+{summary}
 
-{sep}
-BULL CASE
-{sep}
-{bull_case}
+BULL CASE:
+{bull_case[:600]}
 
-{sep}
-BEAR CASE
-{sep}
-{bear_case}
+BEAR CASE:
+{bear_case[:600]}
 
-{sep}
-RISK ASSESSMENT
-{sep}
-{risk_report}
+RISK ASSESSMENT:
+{risk_report[:500]}
 
-Synthesize all of this into your final recommendation. Be decisive and back your
-recommendation with the strongest evidence from the analysis above."""
+Provide a decisive recommendation in this format:
+## Recommendation
+**Action**: BUY / SELL / HOLD
+**Conviction**: HIGH / MEDIUM / LOW
+**Time Horizon**: (e.g. 3–6 months)
 
-    yield from client.stream(system_prompt, user, max_tokens=4000)
+## Rationale
+3-5 bullet points synthesizing the key evidence.
+
+## Key Risks
+2-3 bullet points.
+
+## Position Sizing
+One sentence."""
+
+    yield from client.stream(system_prompt, user, max_tokens=800)
 
 
 def run_portfolio_manager(
