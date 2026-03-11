@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TradingAgents — AI Multi-Agent Stock Analysis</title>
     <script src="https://js.puter.com/v2/"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
         :root {
             --bg: #0e1117;
@@ -126,6 +127,25 @@
         .download-area { text-align: center; margin-top: 20px; }
         .disclaimer { text-align: center; color: var(--muted); font-size: .72rem; margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); }
 
+        /* ── History panel ── */
+        .history-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+        .history-panel summary { padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: .82rem; font-weight: 600; user-select: none; list-style: none; }
+        .history-panel summary::-webkit-details-marker { display: none; }
+        .history-panel summary::after { content: '▾'; margin-left: auto; font-size: .9rem; color: var(--muted); }
+        details[open].history-panel summary::after { content: '▴'; }
+        .history-list { padding: 4px 14px 12px; border-top: 1px solid var(--border); max-height: 260px; overflow-y: auto; }
+        .history-entry { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border); margin-top: 6px; cursor: pointer; transition: border-color .2s; }
+        .history-entry:hover { border-color: var(--blue); background: rgba(0,132,255,.05); }
+        .history-ticker { font-weight: 700; font-size: .92rem; min-width: 52px; }
+        .history-meta { font-size: .7rem; color: var(--muted); flex: 1; }
+        .history-signal { font-size: .72rem; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+        .history-signal.buy { background: rgba(0,212,170,.15); color: var(--green); }
+        .history-signal.sell { background: rgba(255,75,75,.15); color: var(--red); }
+        .history-signal.hold { background: rgba(255,215,0,.12); color: #ffe080; }
+        .history-signal.na { background: rgba(128,128,128,.12); color: var(--muted); }
+        .history-clear { float: right; font-size: .68rem; color: var(--muted); cursor: pointer; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; margin-top: -2px; }
+        .history-clear:hover { color: var(--red); border-color: var(--red); }
+
         /* ── Provider config panel ── */
         .cfg-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
         .cfg-panel summary { padding: 12px 18px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: .85rem; font-weight: 600; user-select: none; list-style: none; }
@@ -186,7 +206,22 @@
                 <label>Base URL</label>
                 <input type="text" id="cfg-url" placeholder="http://localhost:11434/v1" style="width:240px" oninput="saveConfig()">
             </div>
-            <p class="cfg-note" id="cfg-note">API key stored in browser sessionStorage only — clears when you close this tab.</p>
+            <div class="input-group">
+                <label>Eulerpool Key <span style="color:var(--green);font-size:.65rem">(optional · free tier)</span></label>
+                <input type="password" id="cfg-euler-key" placeholder="ep_xxx — eulerpool.com/api" style="width:220px" oninput="saveConfig()" title="Provides richer fundamental data. Falls back to Yahoo Finance if blank or exhausted.">
+            </div>
+            <p class="cfg-note" id="cfg-note">Keys stored in browser sessionStorage only — clear when you close this tab.</p>
+        </div>
+    </details>
+
+    <!-- Scan history -->
+    <details class="history-panel" id="history-panel" style="display:none">
+        <summary>
+            🕘 Scan History
+            <span id="history-count" style="font-size:.72rem;color:var(--muted);margin-left:4px"></span>
+        </summary>
+        <div class="history-list" id="history-list">
+            <span class="history-clear" onclick="clearHistory()">Clear all</span>
         </div>
     </details>
 
@@ -304,8 +339,9 @@
             </div>
         </div>
 
-        <div class="download-area" id="dl-area" style="display:none">
-            <button class="btn btn-outline" onclick="downloadReport()">📥 Download Full Report (.md)</button>
+        <div class="download-area" id="dl-area" style="display:none;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px">
+            <button class="btn btn-outline" onclick="downloadReport('md')">📥 Download Report (.md)</button>
+            <button class="btn btn-outline" onclick="downloadReport('pdf')">📄 Download Report (.pdf)</button>
         </div>
         <div class="disclaimer">⚠️ AI-generated analysis for educational purposes only · Not financial advice · Always do your own research</div>
     </div>
@@ -338,7 +374,7 @@ async function yf(url) {
     return r.json();
 }
 
-async function fetchAll(ticker) {
+async function fetchYahooFinance(ticker) {
     const t = encodeURIComponent(ticker.toUpperCase());
     const mods = 'assetProfile,financialData,defaultKeyStatistics,summaryDetail,recommendationTrend';
 
@@ -357,7 +393,7 @@ async function fetchAll(ticker) {
     const stamps  = (cd.timestamp || []).slice(-closes.length);
     const techs   = closes.length >= 20 ? calcTechs(closes, volumes) : null;
 
-    return { sd, closes, volumes, stamps, techs, news };
+    return { sd, closes, volumes, stamps, techs, news, source:'yahoo' };
 }
 
 // ── Technical indicators ──────────────────────────────────
@@ -407,6 +443,131 @@ function calcTechs(cls, vol) {
         volR: av20?(lv/av20).toFixed(2):null,
         trend: (ma50&&ma200) ? (cur>ma50&&ma50>ma200?'Strong uptrend':cur<ma50&&ma50<ma200?'Strong downtrend':'Mixed') : 'N/A',
     };
+}
+
+// ═══════════════════════════════════════════════════════════
+// EULERPOOL FETCH (primary data source when key is set)
+// ═══════════════════════════════════════════════════════════
+async function epGet(path) {
+    const key = CFG.eulerKey;
+    if (!key) throw new Error('No Eulerpool key');
+    const url = 'https://api.eulerpool.com/v1' + path;
+    let resp;
+    try {
+        resp = await fetch(url, { headers: { Authorization: 'Bearer ' + key } });
+    } catch(_) {
+        resp = await fetch('https://corsproxy.io/?url=' + encodeURIComponent(url),
+            { headers: { Authorization: 'Bearer ' + key } });
+    }
+    if (!resp.ok) throw new Error('Eulerpool HTTP ' + resp.status);
+    return resp.json();
+}
+
+async function fetchEulerpool(ticker) {
+    const t = ticker.toUpperCase();
+    const [profile, ratios, balance, estimates, ownership, newsData] = await Promise.allSettled([
+        epGet(`/stock/${t}/profile`),
+        epGet(`/stock/${t}/ratios`),
+        epGet(`/stock/${t}/balance-sheet`),
+        epGet(`/stock/${t}/estimates`),
+        epGet(`/stock/${t}/ownership`),
+        epGet(`/stock/${t}/news?limit=12`),
+    ]);
+
+    const pro = profile.status==='fulfilled' ? profile.value : {};
+    const rat = ratios.status==='fulfilled' ? ratios.value : {};
+    const bal = balance.status==='fulfilled' ? balance.value : {};
+    const est = estimates.status==='fulfilled' ? estimates.value : {};
+    const own = ownership.status==='fulfilled' ? ownership.value : {};
+    const nws = newsData.status==='fulfilled' ? (newsData.value?.articles || newsData.value?.news || []) : [];
+
+    // Build a normalised structure compatible with the Yahoo Finance formatters
+    const sd = {
+        assetProfile: {
+            longName: pro.name, sector: pro.sector, industry: pro.industry,
+            country: pro.country, website: pro.website,
+            longBusinessSummary: pro.description || pro.summary || '',
+        },
+        financialData: {
+            currentPrice: { raw: pro.price || pro.current_price },
+            targetMeanPrice: { raw: est.target_price || est.targetMeanPrice },
+            targetHighPrice: { raw: est.target_high || est.targetHighPrice },
+            targetLowPrice: { raw: est.target_low || est.targetLowPrice },
+            recommendationKey: est.consensus || est.recommendationKey || 'N/A',
+            recommendationMean: { raw: est.mean_rating || est.recommendationMean },
+            numberOfAnalystOpinions: { raw: est.analyst_count || est.numberOfAnalystOpinions },
+            totalRevenue: { raw: rat.revenue || rat.totalRevenue },
+            revenueGrowth: { raw: rat.revenue_growth || rat.revenueGrowth },
+            grossMargins: { raw: rat.gross_margin || rat.grossMargins },
+            operatingMargins: { raw: rat.operating_margin || rat.operatingMargins },
+            profitMargins: { raw: rat.net_margin || rat.profitMargins },
+            ebitda: { raw: rat.ebitda },
+            earningsGrowth: { raw: rat.earnings_growth || rat.earningsGrowth },
+            trailingEps: { raw: rat.eps || rat.trailingEps },
+            totalCash: { raw: bal.cash || bal.totalCash },
+            totalDebt: { raw: bal.total_debt || bal.totalDebt },
+            debtToEquity: { raw: bal.debt_to_equity || bal.debtToEquity },
+            currentRatio: { raw: bal.current_ratio || bal.currentRatio },
+            freeCashflow: { raw: bal.free_cash_flow || bal.freeCashflow },
+            returnOnEquity: { raw: bal.roe || bal.returnOnEquity },
+        },
+        defaultKeyStatistics: {
+            trailingPE: { raw: rat.pe_ratio || rat.trailingPE },
+            forwardPE: { raw: rat.forward_pe || rat.forwardPE },
+            pegRatio: { raw: rat.peg_ratio || rat.pegRatio },
+            priceToBook: { raw: rat.price_to_book || rat.priceToBook },
+            marketCap: { raw: pro.market_cap || pro.marketCap },
+            enterpriseValue: { raw: pro.enterprise_value },
+            shortRatio: { raw: own.short_ratio || own.shortRatio },
+            shortPercentOfFloat: { raw: own.short_float || own.shortPercentOfFloat },
+            institutionsPercentHeld: { raw: own.institutional_ownership || own.heldPercentInstitutions },
+            insidersPercentHeld: { raw: own.insider_ownership || own.heldPercentInsiders },
+            floatShares: { raw: own.float_shares || own.floatShares },
+            sharesOutstanding: { raw: own.shares_outstanding || own.sharesOutstanding },
+            forwardEps: { raw: rat.forward_eps || rat.forwardEps },
+            enterpriseToEbitda: { raw: rat.ev_ebitda || rat.enterpriseToEbitda },
+            '52WeekChange': { raw: own.week_52_change || own['52WeekChange'] },
+            beta: { raw: pro.beta },
+        },
+        summaryDetail: {
+            regularMarketPrice: { raw: pro.price },
+            beta: { raw: pro.beta },
+            fiftyTwoWeekHigh: { raw: pro.week_52_high || pro.fiftyTwoWeekHigh },
+            fiftyTwoWeekLow: { raw: pro.week_52_low || pro.fiftyTwoWeekLow },
+            priceToSalesTrailing12Months: { raw: rat.price_to_sales || rat.priceToSalesTrailing12Months },
+            dividendYield: { raw: rat.dividend_yield || rat.dividendYield },
+        },
+    };
+
+    const news = nws.map(n => ({
+        title: n.title || '',
+        publisher: n.source || n.publisher || '',
+        providerPublishTime: n.date ? Math.floor(new Date(n.date).getTime()/1000) : 0,
+        summary: n.summary || n.description || '',
+    }));
+
+    return { sd, closes:[], volumes:[], stamps:[], techs:null, news, source:'eulerpool' };
+}
+
+async function fetchAll(ticker) {
+    // Try Eulerpool first if a key is configured
+    if (CFG.eulerKey) {
+        try {
+            const ep = await fetchEulerpool(ticker);
+            // Still fetch price history from Yahoo for technical analysis (Eulerpool free tier may not include OHLCV)
+            try {
+                const yData = await fetchYahooFinance(ticker);
+                ep.closes = yData.closes;
+                ep.volumes = yData.volumes;
+                ep.stamps = yData.stamps;
+                ep.techs = yData.techs;
+            } catch(_) {}
+            return ep;
+        } catch(e) {
+            console.warn('Eulerpool failed (' + e.message + '), falling back to Yahoo Finance');
+        }
+    }
+    return fetchYahooFinance(ticker);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -527,7 +688,7 @@ const PROV = {
 };
 
 // Active config (saved/loaded from sessionStorage)
-const CFG = { provider:'puter', model:'claude-opus-4-6', key:'', url:'' };
+const CFG = { provider:'puter', model:'claude-opus-4-6', key:'', url:'', eulerKey:'' };
 
 function loadConfig() {
     try {
@@ -540,6 +701,7 @@ function loadConfig() {
 function saveConfig() {
     CFG.key = document.getElementById('cfg-key')?.value || '';
     CFG.url = document.getElementById('cfg-url')?.value || '';
+    CFG.eulerKey = document.getElementById('cfg-euler-key')?.value || '';
     CFG.model = getCfgModel();
     try { sessionStorage.setItem('ta_cfg', JSON.stringify(CFG)); } catch(_) {}
 }
@@ -582,6 +744,7 @@ function applyConfigToUI() {
     document.getElementById('cfg-key').placeholder = info.hint;
     document.getElementById('cfg-key').value = CFG.key;
     document.getElementById('cfg-url').value = CFG.url;
+    document.getElementById('cfg-euler-key').value = CFG.eulerKey || '';
 
     // Badges
     const badge = document.getElementById('cfg-summary-badge');
@@ -885,6 +1048,59 @@ function renderMD(el, text) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// SCAN HISTORY  (localStorage — persists across sessions)
+// ═══════════════════════════════════════════════════════════
+const HISTORY_KEY = 'ta_history';
+const MAX_HISTORY = 30;
+
+function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch(_) { return []; }
+}
+
+function saveHistory(arr) {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr.slice(-MAX_HISTORY))); } catch(_) {}
+}
+
+function addToHistory(ticker, provider, model, signal) {
+    const arr = loadHistory();
+    arr.push({
+        ticker: ticker.toUpperCase(),
+        ts: new Date().toLocaleString(),
+        provider, model,
+        signal: signal || '—',
+    });
+    saveHistory(arr);
+    renderHistory();
+}
+
+function clearHistory() {
+    if (confirm('Clear all scan history?')) { localStorage.removeItem(HISTORY_KEY); renderHistory(); }
+}
+
+function renderHistory() {
+    const arr = loadHistory();
+    const panel = document.getElementById('history-panel');
+    const list  = document.getElementById('history-list');
+    const count = document.getElementById('history-count');
+
+    if (!arr.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    count.textContent = `(${arr.length})`;
+
+    const items = arr.slice().reverse().map(e => {
+        const sig = (e.signal || '').toUpperCase();
+        const cls = sig==='BUY'?'buy':sig==='SELL'?'sell':sig==='HOLD'?'hold':'na';
+        return `<div class="history-entry" onclick="document.getElementById('ticker').value='${e.ticker}'; document.getElementById('analyze-btn').scrollIntoView({behavior:'smooth'})">
+            <span class="history-ticker">${e.ticker}</span>
+            <span class="history-meta">${e.ts}<br>${e.provider} · ${e.model}</span>
+            <span class="history-signal ${cls}">${sig||'—'}</span>
+        </div>`;
+    }).join('');
+
+    list.innerHTML = `<span class="history-clear" onclick="clearHistory()">Clear all</span>${items}`;
+}
+
+// ═══════════════════════════════════════════════════════════
 // MAIN PIPELINE
 // ═══════════════════════════════════════════════════════════
 async function startAnalysis() {
@@ -1045,16 +1261,26 @@ async function pipeline(ticker, rounds) {
         stepStatus(4,'err');
     }
 
-    document.getElementById('dl-area').style.display='block';
+    // Extract signal from PM recommendation
+    const sigMatch = pmRaw.match(/\*\*Action\*\*:\s*(BUY|SELL|HOLD)/i);
+    const signal = sigMatch ? sigMatch[1].toUpperCase() : '—';
+
+    // Save to scan history
+    const provLabel = document.getElementById('cfg-provider').value;
+    const modelLabel = getCfgModel();
+    addToHistory(ticker, provLabel, modelLabel, signal);
+
+    document.getElementById('dl-area').style.display = 'flex';
 }
 
 // ═══════════════════════════════════════════════════════════
-// DOWNLOAD
+// DOWNLOAD (Markdown + PDF)
 // ═══════════════════════════════════════════════════════════
-function downloadReport() {
+function buildReportText() {
     const parts = [
         `# TradingAgents Report: ${S.ticker}`,
         `Generated: ${new Date().toLocaleString()}`,
+        `Provider: ${getCfgModel()} via ${document.getElementById('cfg-provider').value}`,
         '',
         '## Analyst Reports',
         ...Object.entries(S.reports).map(([n,r])=>`### ${n}\n${r}`),
@@ -1070,12 +1296,49 @@ function downloadReport() {
         '---',
         '*AI-generated for educational purposes only. Not financial advice.*',
     ];
-    const blob = new Blob([parts.join('\n\n')], {type:'text/markdown'});
-    const a = Object.assign(document.createElement('a'), {
-        href: URL.createObjectURL(blob),
-        download: `trading_report_${S.ticker}.md`,
-    });
-    a.click(); URL.revokeObjectURL(a.href);
+    return parts.join('\n\n');
+}
+
+function downloadReport(fmt = 'md') {
+    if (fmt === 'md') {
+        const blob = new Blob([buildReportText()], {type:'text/markdown'});
+        const a = Object.assign(document.createElement('a'), {
+            href: URL.createObjectURL(blob),
+            download: `trading_report_${S.ticker}.md`,
+        });
+        a.click(); URL.revokeObjectURL(a.href);
+        return;
+    }
+
+    // PDF via html2pdf.js
+    const content = `
+<div style="font-family:sans-serif;max-width:900px;margin:0 auto;padding:20px;color:#111">
+    <h1 style="color:#0084ff;border-bottom:2px solid #0084ff;padding-bottom:8px">TradingAgents Report: ${S.ticker}</h1>
+    <p style="color:#666;margin-bottom:20px">Generated: ${new Date().toLocaleString()} &nbsp;|&nbsp; Model: ${getCfgModel()}</p>
+    <h2 style="color:#333;border-bottom:1px solid #ccc;padding-bottom:4px">Analyst Reports</h2>
+    ${Object.entries(S.reports).map(([n,r])=>`<h3 style="color:#555;margin-top:18px">${n}</h3><p style="white-space:pre-wrap;font-size:12px;line-height:1.6">${r.replace(/</g,'&lt;')}</p>`).join('')}
+    <h2 style="color:#333;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px">Bull Case</h2>
+    <p style="white-space:pre-wrap;font-size:12px;line-height:1.6">${S.bull.replace(/</g,'&lt;')}</p>
+    <h2 style="color:#333;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px">Bear Case</h2>
+    <p style="white-space:pre-wrap;font-size:12px;line-height:1.6">${S.bear.replace(/</g,'&lt;')}</p>
+    <h2 style="color:#333;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px">Risk Assessment</h2>
+    <p style="white-space:pre-wrap;font-size:12px;line-height:1.6">${S.risk.replace(/</g,'&lt;')}</p>
+    <h2 style="color:#333;border-bottom:1px solid #ccc;padding-bottom:4px;margin-top:24px">Portfolio Manager Recommendation</h2>
+    <p style="white-space:pre-wrap;font-size:12px;line-height:1.6">${S.pm.replace(/</g,'&lt;')}</p>
+    <hr style="margin-top:30px">
+    <p style="color:#999;font-size:11px;text-align:center">AI-generated for educational purposes only. Not financial advice. Always do your own research.</p>
+</div>`;
+
+    const container = document.createElement('div');
+    container.innerHTML = content;
+    document.body.appendChild(container);
+
+    html2pdf().from(container).set({
+        margin: [10, 10],
+        filename: `trading_report_${S.ticker}.pdf`,
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    }).save().then(() => document.body.removeChild(container));
 }
 
 // ── Enter key support ─────────────────────────────────────
@@ -1085,6 +1348,7 @@ document.getElementById('ticker').addEventListener('keydown', e => {
 
 // ── Init ──────────────────────────────────────────────────
 loadConfig();
+renderHistory();
 </script>
 </body>
 </html>

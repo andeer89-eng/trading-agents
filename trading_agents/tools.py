@@ -1,13 +1,196 @@
 """
-Market data tools powered by yfinance.
-Each function returns a JSON string for use as a Claude tool result.
+Market data tools — Eulerpool API (primary) with yfinance fallback.
+
+Eulerpool is used first when an API key is configured via configure_eulerpool().
+If Eulerpool fails (rate-limited, quota exceeded, or any error), each function
+silently falls back to the existing yfinance implementation.
 """
 
 import json
+import os
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
 
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None  # type: ignore[assignment]
+
+
+# ── Eulerpool module-level config ─────────────────────────────────────────────
+
+_EULER_KEY: str = os.getenv("EULERPOOL_API_KEY", "")
+_EULER_BASE: str = "https://api.eulerpool.com/v1"
+
+
+def configure_eulerpool(api_key: str, base_url: str | None = None) -> None:
+    """Set the Eulerpool API key (and optionally override the base URL)."""
+    global _EULER_KEY, _EULER_BASE
+    _EULER_KEY = api_key.strip()
+    if base_url:
+        _EULER_BASE = base_url.rstrip("/")
+
+
+def _ep_get(path: str, params: dict | None = None) -> dict:
+    """HTTP GET against the Eulerpool API. Raises on any non-2xx response."""
+    if _requests is None:
+        raise RuntimeError("requests package not installed")
+    url = f"{_EULER_BASE}{path}"
+    resp = _requests.get(
+        url,
+        params=params or {},
+        headers={"Authorization": f"Bearer {_EULER_KEY}"},
+        timeout=8,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# ── Eulerpool-specific helpers ────────────────────────────────────────────────
+
+def _ep_company_info(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/profile")
+    result = {
+        "name": data.get("name"),
+        "ticker": ticker.upper(),
+        "sector": data.get("sector"),
+        "industry": data.get("industry"),
+        "country": data.get("country"),
+        "exchange": data.get("exchange"),
+        "market_cap": data.get("market_cap") or data.get("marketCap"),
+        "enterprise_value": data.get("enterprise_value"),
+        "employees": data.get("employees") or data.get("fullTimeEmployees"),
+        "description": (data.get("description") or data.get("summary") or "")[:600],
+        "website": data.get("website"),
+        "current_price": data.get("price") or data.get("current_price"),
+        "52w_high": data.get("week_52_high") or data.get("fiftyTwoWeekHigh"),
+        "52w_low": data.get("week_52_low") or data.get("fiftyTwoWeekLow"),
+        "beta": data.get("beta"),
+        "source": "eulerpool",
+    }
+    return _safe_json(result)
+
+
+def _ep_financials(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/ratios")
+    result = {
+        "valuation": {
+            "pe_ratio_trailing": data.get("pe_ratio") or data.get("trailingPE"),
+            "pe_ratio_forward": data.get("forward_pe") or data.get("forwardPE"),
+            "peg_ratio": data.get("peg_ratio") or data.get("pegRatio"),
+            "price_to_book": data.get("price_to_book") or data.get("priceToBook"),
+            "price_to_sales": data.get("price_to_sales") or data.get("priceToSalesTrailing12Months"),
+            "ev_to_ebitda": data.get("ev_ebitda") or data.get("enterpriseToEbitda"),
+            "ev_to_revenue": data.get("ev_revenue") or data.get("enterpriseToRevenue"),
+        },
+        "income": {
+            "total_revenue": data.get("revenue") or data.get("totalRevenue"),
+            "revenue_growth_yoy": data.get("revenue_growth") or data.get("revenueGrowth"),
+            "gross_margin": data.get("gross_margin") or data.get("grossMargins"),
+            "operating_margin": data.get("operating_margin") or data.get("operatingMargins"),
+            "profit_margin": data.get("net_margin") or data.get("profitMargins"),
+            "ebitda": data.get("ebitda"),
+            "eps_trailing": data.get("eps") or data.get("trailingEps"),
+            "eps_forward": data.get("forward_eps") or data.get("forwardEps"),
+            "earnings_growth_yoy": data.get("earnings_growth") or data.get("earningsGrowth"),
+        },
+        "dividends": {
+            "dividend_yield": data.get("dividend_yield") or data.get("dividendYield"),
+            "payout_ratio": data.get("payout_ratio") or data.get("payoutRatio"),
+            "dividend_rate": data.get("dividend") or data.get("dividendRate"),
+        },
+        "source": "eulerpool",
+    }
+    return _safe_json(result)
+
+
+def _ep_balance_sheet(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/balance-sheet")
+    result = {
+        "assets": {
+            "total_assets": data.get("total_assets") or data.get("totalAssets"),
+            "cash_and_equivalents": data.get("cash") or data.get("totalCash"),
+            "cash_per_share": data.get("cash_per_share") or data.get("totalCashPerShare"),
+        },
+        "liabilities": {
+            "total_debt": data.get("total_debt") or data.get("totalDebt"),
+            "long_term_debt": data.get("long_term_debt") or data.get("longTermDebt"),
+            "debt_to_equity": data.get("debt_to_equity") or data.get("debtToEquity"),
+        },
+        "equity": {
+            "book_value_per_share": data.get("book_value_per_share") or data.get("bookValue"),
+            "return_on_equity": data.get("roe") or data.get("returnOnEquity"),
+            "return_on_assets": data.get("roa") or data.get("returnOnAssets"),
+        },
+        "liquidity": {
+            "current_ratio": data.get("current_ratio") or data.get("currentRatio"),
+            "quick_ratio": data.get("quick_ratio") or data.get("quickRatio"),
+            "free_cashflow": data.get("free_cash_flow") or data.get("freeCashflow"),
+            "operating_cashflow": data.get("operating_cash_flow") or data.get("operatingCashflow"),
+        },
+        "source": "eulerpool",
+    }
+    return _safe_json(result)
+
+
+def _ep_analyst_ratings(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/estimates")
+    result = {
+        "consensus": data.get("consensus") or data.get("recommendationKey", "N/A"),
+        "mean_rating": data.get("mean_rating") or data.get("recommendationMean"),
+        "target_price_mean": data.get("target_price") or data.get("targetMeanPrice"),
+        "target_price_high": data.get("target_high") or data.get("targetHighPrice"),
+        "target_price_low": data.get("target_low") or data.get("targetLowPrice"),
+        "current_price": data.get("price") or data.get("currentPrice"),
+        "num_analysts": data.get("analyst_count") or data.get("numberOfAnalystOpinions"),
+        "source": "eulerpool",
+    }
+    cp = result["current_price"]
+    tp = result["target_price_mean"]
+    if cp and tp:
+        result["upside_to_target_pct"] = round((tp / cp - 1) * 100, 2)
+    return _safe_json(result)
+
+
+def _ep_market_sentiment(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/ownership")
+    result = {
+        "short_interest": {
+            "short_ratio": data.get("short_ratio") or data.get("shortRatio"),
+            "short_percent_of_float": data.get("short_float") or data.get("shortPercentOfFloat"),
+        },
+        "ownership": {
+            "institutional_pct": data.get("institutional_ownership") or data.get("heldPercentInstitutions"),
+            "insider_pct": data.get("insider_ownership") or data.get("heldPercentInsiders"),
+        },
+        "options_signals": {
+            "beta": data.get("beta"),
+            "52w_change": data.get("week_52_change") or data.get("52WeekChange"),
+        },
+        "float_shares": data.get("float_shares") or data.get("floatShares"),
+        "shares_outstanding": data.get("shares_outstanding") or data.get("sharesOutstanding"),
+        "source": "eulerpool",
+    }
+    return _safe_json(result)
+
+
+def _ep_news(ticker: str) -> str:
+    data = _ep_get(f"/stock/{ticker.upper()}/news", params={"limit": 12})
+    articles = data.get("articles") or data.get("news") or []
+    formatted = []
+    for item in articles[:12]:
+        formatted.append({
+            "title": item.get("title", ""),
+            "publisher": item.get("source") or item.get("publisher", ""),
+            "published": item.get("date") or item.get("published", "Unknown"),
+            "summary": (item.get("summary") or item.get("description") or "")[:400],
+            "url": item.get("url") or item.get("link", ""),
+        })
+    return _safe_json({"count": len(formatted), "articles": formatted, "source": "eulerpool"})
+
+
+# ── Shared utilities ──────────────────────────────────────────────────────────
 
 def _safe_json(obj) -> str:
     """Serialize to JSON, converting non-serializable types."""
@@ -21,12 +204,28 @@ def _safe_json(obj) -> str:
     return json.dumps(obj, default=default, indent=2)
 
 
+def _try_eulerpool(fn, ticker: str) -> str | None:
+    """Run an Eulerpool fetch function; return None on any failure."""
+    if not _EULER_KEY:
+        return None
+    try:
+        return fn(ticker)
+    except Exception as e:
+        print(f"  ⚠ Eulerpool ({fn.__name__}): {e} — falling back to yfinance")
+        return None
+
+
+# ── Public data functions ──────────────────────────────────────────────────────
+
 def get_company_info(ticker: str) -> str:
     """Get company overview, sector, market cap, and description."""
+    result = _try_eulerpool(_ep_company_info, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        result = {
+        data = {
             "name": info.get("longName"),
             "ticker": ticker.upper(),
             "sector": info.get("sector"),
@@ -42,8 +241,9 @@ def get_company_info(ticker: str) -> str:
             "52w_high": info.get("fiftyTwoWeekHigh"),
             "52w_low": info.get("fiftyTwoWeekLow"),
             "beta": info.get("beta"),
+            "source": "yfinance",
         }
-        return _safe_json(result)
+        return _safe_json(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -62,7 +262,6 @@ def get_price_history(ticker: str, period: str = "3mo") -> str:
         current = float(close.iloc[-1])
         start = float(close.iloc[0])
 
-        # Recent closing prices (last 15 days)
         recent = {
             str(k.date()): round(float(v), 2)
             for k, v in close.tail(15).items()
@@ -78,6 +277,7 @@ def get_price_history(ticker: str, period: str = "3mo") -> str:
             "avg_daily_volume": int(hist["Volume"].mean()),
             "last_volume": int(hist["Volume"].iloc[-1]),
             "recent_closes": recent,
+            "source": "yfinance",
         }
         return _safe_json(result)
     except Exception as e:
@@ -86,10 +286,13 @@ def get_price_history(ticker: str, period: str = "3mo") -> str:
 
 def get_financials(ticker: str) -> str:
     """Get key financial ratios, income statement metrics, and valuation multiples."""
+    result = _try_eulerpool(_ep_financials, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        result = {
+        data = {
             "valuation": {
                 "pe_ratio_trailing": info.get("trailingPE"),
                 "pe_ratio_forward": info.get("forwardPE"),
@@ -117,18 +320,22 @@ def get_financials(ticker: str) -> str:
                 "payout_ratio": info.get("payoutRatio"),
                 "dividend_rate": info.get("dividendRate"),
             },
+            "source": "yfinance",
         }
-        return _safe_json(result)
+        return _safe_json(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
 def get_balance_sheet(ticker: str) -> str:
     """Get balance sheet health: assets, debt, cash, and liquidity ratios."""
+    result = _try_eulerpool(_ep_balance_sheet, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        result = {
+        data = {
             "assets": {
                 "total_assets": info.get("totalAssets"),
                 "cash_and_equivalents": info.get("totalCash"),
@@ -150,8 +357,9 @@ def get_balance_sheet(ticker: str) -> str:
                 "free_cashflow": info.get("freeCashflow"),
                 "operating_cashflow": info.get("operatingCashflow"),
             },
+            "source": "yfinance",
         }
-        return _safe_json(result)
+        return _safe_json(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -242,6 +450,7 @@ def get_technical_indicators(ticker: str) -> str:
                 "avg_volume_20d": int(avg_vol_20),
                 "volume_vs_avg_ratio": round(vol_ratio, 2) if vol_ratio else None,
             },
+            "source": "yfinance",
         }
         return _safe_json(result)
     except Exception as e:
@@ -250,6 +459,9 @@ def get_technical_indicators(ticker: str) -> str:
 
 def get_news(ticker: str) -> str:
     """Get recent news headlines and summaries for a stock."""
+    result = _try_eulerpool(_ep_news, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         news_items = stock.news or []
@@ -264,17 +476,20 @@ def get_news(ticker: str) -> str:
                 "summary": (item.get("summary") or "")[:400],
                 "url": item.get("link", ""),
             })
-        return _safe_json({"count": len(formatted), "articles": formatted})
+        return _safe_json({"count": len(formatted), "articles": formatted, "source": "yfinance"})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
 def get_analyst_ratings(ticker: str) -> str:
     """Get Wall Street analyst price targets and recommendation consensus."""
+    result = _try_eulerpool(_ep_analyst_ratings, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        result = {
+        data = {
             "consensus": info.get("recommendationKey", "N/A"),
             "mean_rating": info.get("recommendationMean"),
             "target_price_mean": info.get("targetMeanPrice"),
@@ -282,33 +497,35 @@ def get_analyst_ratings(ticker: str) -> str:
             "target_price_low": info.get("targetLowPrice"),
             "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
             "num_analysts": info.get("numberOfAnalystOpinions"),
+            "source": "yfinance",
         }
-        # Upside/downside to target
-        current = result["current_price"]
-        target = result["target_price_mean"]
+        current = data["current_price"]
+        target = data["target_price_mean"]
         if current and target:
-            result["upside_to_target_pct"] = round((target / current - 1) * 100, 2)
+            data["upside_to_target_pct"] = round((target / current - 1) * 100, 2)
 
-        # Recent ratings history
         try:
             recs = stock.recommendations
             if recs is not None and not recs.empty:
                 recent = recs.tail(8).reset_index()
-                result["recent_ratings"] = recent.to_dict(orient="records")
+                data["recent_ratings"] = recent.to_dict(orient="records")
         except Exception:
             pass
 
-        return _safe_json(result)
+        return _safe_json(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
 
 def get_market_sentiment(ticker: str) -> str:
     """Get short interest, institutional ownership, and insider activity."""
+    result = _try_eulerpool(_ep_market_sentiment, ticker)
+    if result:
+        return result
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        result = {
+        data = {
             "short_interest": {
                 "short_ratio": info.get("shortRatio"),
                 "short_percent_of_float": info.get("shortPercentOfFloat"),
@@ -318,15 +535,16 @@ def get_market_sentiment(ticker: str) -> str:
                 "insider_pct": info.get("heldPercentInsiders"),
             },
             "options_signals": {
-                "implied_volatility_pct": None,  # Not directly in yfinance info
+                "implied_volatility_pct": None,
                 "beta": info.get("beta"),
                 "52w_change": info.get("52WeekChange"),
                 "sp500_52w_change": info.get("SandP52WeekChange"),
             },
             "float_shares": info.get("floatShares"),
             "shares_outstanding": info.get("sharesOutstanding"),
+            "source": "yfinance",
         }
-        return _safe_json(result)
+        return _safe_json(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
 

@@ -5,11 +5,13 @@ Multi-Agent Financial Trading Framework
 Supports Anthropic, OpenAI, Groq, OpenRouter, and any OpenAI-compatible API.
 """
 
+import io
 import os
 import concurrent.futures
 import streamlit as st
 
 from trading_agents.llm import LLMClient, PROVIDERS
+from trading_agents.tools import configure_eulerpool
 from trading_agents.agents import (
     run_fundamentals_analyst,
     run_sentiment_analyst,
@@ -42,8 +44,20 @@ st.markdown("""
         margin-bottom: 0;
     }
     .sub-header { color: #888; font-size: 0.95rem; margin-top: 0; }
+    .history-item {
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid #333;
+        margin-bottom: 4px;
+        cursor: pointer;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Session state init ─────────────────────────────────────────────────────────
+
+if "scan_history" not in st.session_state:
+    st.session_state.scan_history = []  # list of dicts: {ticker, ts, provider, model, signal}
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
@@ -123,6 +137,32 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Eulerpool API (optional) ──────────────────────────────────────────────
+    st.subheader("📊 Market Data")
+    st.caption("Eulerpool provides richer fundamental data (free tier available).")
+
+    euler_key = (
+        st.secrets.get("EULERPOOL_API_KEY", "")
+        or os.environ.get("EULERPOOL_API_KEY", "")
+    )
+    if euler_key:
+        st.success("✓ Eulerpool key loaded from environment", icon="✅")
+    else:
+        euler_key = st.text_input(
+            "Eulerpool API Key (optional)",
+            type="password",
+            placeholder="ep_xxxxxxxxxxxxxxxx",
+            help="Leave blank to use yfinance only. Get a free key at eulerpool.com",
+        )
+
+    if euler_key:
+        configure_eulerpool(euler_key)
+        st.caption("Data source: Eulerpool → yfinance fallback")
+    else:
+        st.caption("Data source: yfinance")
+
+    st.divider()
+
     # Validate before enabling button
     ready = bool(ticker_input and api_key and selected_model)
     if provider_key == "custom" and not custom_base_url:
@@ -149,6 +189,19 @@ with st.sidebar:
     ]:
         st.caption(cap)
 
+    # ── Scan history ──────────────────────────────────────────────────────────
+    if st.session_state.scan_history:
+        st.divider()
+        st.subheader("🕘 Scan History")
+        for entry in reversed(st.session_state.scan_history[-30:]):
+            signal_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(
+                entry.get("signal", "").upper(), "⚪"
+            )
+            st.caption(
+                f"{signal_icon} **{entry['ticker']}** · {entry['ts']}\n\n"
+                f"{entry['provider']} / {entry['model']}"
+            )
+
 # ── Landing state ──────────────────────────────────────────────────────────────
 
 if not analyze_btn:
@@ -172,7 +225,7 @@ if not analyze_btn:
 | 3. Risk | Risk Manager | Assess **portfolio risk** and position sizing |
 | 4. Decision | Portfolio Manager | **Synthesize** everything into a BUY/SELL/HOLD recommendation |
 
-All analysts use **real-time market data** via yfinance (prices, financials, RSI, MACD, news, etc.)
+All analysts use **real-time market data** via Eulerpool (if key provided) or yfinance.
 
 **Supported providers:** Anthropic · OpenAI · Groq · OpenRouter · Any OpenAI-compatible endpoint
         """)
@@ -337,16 +390,38 @@ full_recommendation = st.write_stream(
     )
 )
 
+# ── Record scan in history ─────────────────────────────────────────────────────
+
+import re
+from datetime import datetime as _dt
+
+# Best-effort signal extraction from the recommendation text
+_signal_match = re.search(r'\*\*Action\*\*:\s*(BUY|SELL|HOLD)', full_recommendation, re.IGNORECASE)
+_signal = _signal_match.group(1).upper() if _signal_match else "—"
+
+st.session_state.scan_history.append({
+    "ticker": ticker_input,
+    "ts": _dt.now().strftime("%Y-%m-%d %H:%M"),
+    "provider": pinfo["label"],
+    "model": selected_model,
+    "signal": _signal,
+})
+# Keep at most 30 entries
+st.session_state.scan_history = st.session_state.scan_history[-30:]
+
 st.divider()
 st.success(
-    f"✅ Analysis complete for **{ticker_input}**. "
+    f"✅ Analysis complete for **{ticker_input}** — Recommendation: **{_signal}**. "
     "AI-generated for educational purposes only — not financial advice.",
     icon="✅",
 )
 
+# ── Build full report text ─────────────────────────────────────────────────────
+
 report_text = f"""# TradingAgents Report: {ticker_input}
 
 Provider: {pinfo['label']} · Model: {selected_model}
+Generated: {_dt.now().strftime("%Y-%m-%d %H:%M")}
 
 ## Analyst Reports
 
@@ -369,9 +444,99 @@ Provider: {pinfo['label']} · Model: {selected_model}
 *Not financial advice. Always do your own research.*
 """
 
-st.download_button(
-    label="📥 Download Full Report",
-    data=report_text,
-    file_name=f"trading_report_{ticker_input}.md",
-    mime="text/markdown",
-)
+# ── Download buttons ──────────────────────────────────────────────────────────
+
+dl_col1, dl_col2 = st.columns(2)
+
+with dl_col1:
+    st.download_button(
+        label="📥 Download Report (Markdown)",
+        data=report_text,
+        file_name=f"trading_report_{ticker_input}.md",
+        mime="text/markdown",
+    )
+
+with dl_col2:
+    # Generate PDF using reportlab (if available) or fallback to HTML
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+        from reportlab.lib import colors
+
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=A4,
+            rightMargin=2 * cm,
+            leftMargin=2 * cm,
+            topMargin=2 * cm,
+            bottomMargin=2 * cm,
+        )
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, spaceAfter=12)
+        h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6)
+        body_style = ParagraphStyle("Body", parent=styles["Normal"], fontSize=9, leading=13, spaceAfter=4)
+
+        story = []
+        story.append(Paragraph(f"TradingAgents Report: {ticker_input}", title_style))
+        story.append(Paragraph(f"Provider: {pinfo['label']} · Model: {selected_model}", body_style))
+        story.append(Paragraph(f"Generated: {_dt.now().strftime('%Y-%m-%d %H:%M')}", body_style))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.grey, spaceAfter=10))
+
+        def _add_section(heading: str, content: str):
+            story.append(Paragraph(heading, h2_style))
+            for para in content.split("\n\n"):
+                clean = para.strip().replace("**", "").replace("##", "").replace("#", "")
+                if clean:
+                    story.append(Paragraph(clean, body_style))
+            story.append(Spacer(1, 6))
+
+        for name, report in analyst_reports.items():
+            _add_section(name, report)
+
+        _add_section("Bull Case", bull_argument)
+        _add_section("Bear Case", bear_argument)
+        _add_section("Risk Assessment", risk_report)
+        _add_section("Portfolio Manager Recommendation", full_recommendation)
+
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey, spaceAfter=6))
+        story.append(Paragraph("AI-generated for educational purposes only. Not financial advice.", body_style))
+
+        doc.build(story)
+        pdf_bytes = pdf_buffer.getvalue()
+
+        st.download_button(
+            label="📄 Download Report (PDF)",
+            data=pdf_bytes,
+            file_name=f"trading_report_{ticker_input}.pdf",
+            mime="application/pdf",
+        )
+    except ImportError:
+        # reportlab not installed — offer HTML instead
+        html_report = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>TradingAgents Report: {ticker_input}</title>
+<style>
+  body {{ font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }}
+  h1 {{ color: #0084ff; }} h2 {{ border-bottom: 1px solid #ccc; padding-bottom: 4px; }}
+  pre {{ white-space: pre-wrap; font-family: inherit; }}
+</style></head><body>
+<h1>TradingAgents Report: {ticker_input}</h1>
+<p><strong>Provider:</strong> {pinfo['label']} · <strong>Model:</strong> {selected_model}<br>
+<strong>Generated:</strong> {_dt.now().strftime('%Y-%m-%d %H:%M')}</p>
+<hr>
+{''.join(f"<h2>{name}</h2><pre>{report}</pre>" for name, report in analyst_reports.items())}
+<h2>Bull Case</h2><pre>{bull_argument}</pre>
+<h2>Bear Case</h2><pre>{bear_argument}</pre>
+<h2>Risk Assessment</h2><pre>{risk_report}</pre>
+<h2>Portfolio Manager Recommendation</h2><pre>{full_recommendation}</pre>
+<hr><p><em>AI-generated for educational purposes only. Not financial advice.</em></p>
+</body></html>"""
+        st.download_button(
+            label="📄 Download Report (HTML)",
+            data=html_report,
+            file_name=f"trading_report_{ticker_input}.html",
+            mime="text/html",
+        )
