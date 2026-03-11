@@ -57,7 +57,9 @@ st.markdown("""
 # ── Session state init ─────────────────────────────────────────────────────────
 
 if "scan_history" not in st.session_state:
-    st.session_state.scan_history = []  # list of dicts: {ticker, ts, provider, model, signal}
+    st.session_state.scan_history = []  # list of dicts: {ticker, ts, provider, model, signal, report}
+if "viewed_report" not in st.session_state:
+    st.session_state.viewed_report = None  # index of history entry being viewed
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
@@ -193,7 +195,9 @@ with st.sidebar:
     if st.session_state.scan_history:
         st.divider()
         st.subheader("🕘 Scan History")
-        for entry in reversed(st.session_state.scan_history[-30:]):
+        history = st.session_state.scan_history
+        for idx in range(len(history) - 1, max(len(history) - 31, -1), -1):
+            entry = history[idx]
             signal_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(
                 entry.get("signal", "").upper(), "⚪"
             )
@@ -201,6 +205,42 @@ with st.sidebar:
                 f"{signal_icon} **{entry['ticker']}** · {entry['ts']}\n\n"
                 f"{entry['provider']} / {entry['model']}"
             )
+            if entry.get("report"):
+                if st.button("📄 View Report", key=f"view_{idx}"):
+                    st.session_state.viewed_report = idx
+                    st.rerun()
+
+# ── Saved report view ──────────────────────────────────────────────────────────
+
+if not analyze_btn and st.session_state.viewed_report is not None:
+    entry = st.session_state.scan_history[st.session_state.viewed_report]
+    r = entry["report"]
+    signal_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(entry.get("signal", "").upper(), "⚪")
+    st.markdown(f"## 📊 Saved Report: `{entry['ticker']}`")
+    st.caption(f"{entry['provider']} / {entry['model']} · {entry['ts']} · {signal_icon} **{entry.get('signal', '—')}**")
+    if st.button("✖ Close Report"):
+        st.session_state.viewed_report = None
+        st.rerun()
+    st.divider()
+    analyst_icons = {"Fundamentals Analyst": "💰", "Sentiment Analyst": "🧠",
+                     "News Analyst": "📰", "Technical Analyst": "📉"}
+    with st.expander("📋 Analyst Reports", expanded=False):
+        tabs = st.tabs([f"{analyst_icons.get(n, '📊')} {n}" for n in r["analyst_reports"]])
+        for tab, (name, report) in zip(tabs, r["analyst_reports"].items()):
+            with tab:
+                st.markdown(report)
+    col_bull, col_bear = st.columns(2)
+    with col_bull:
+        with st.expander("🟢 Bull Case", expanded=False):
+            st.markdown(r["bull_argument"])
+    with col_bear:
+        with st.expander("🔴 Bear Case", expanded=False):
+            st.markdown(r["bear_argument"])
+    with st.expander("⚠️ Risk Report", expanded=False):
+        st.markdown(r["risk_report"])
+    st.markdown("### Portfolio Manager Recommendation")
+    st.markdown(r["full_recommendation"])
+    st.stop()
 
 # ── Landing state ──────────────────────────────────────────────────────────────
 
@@ -405,6 +445,13 @@ st.session_state.scan_history.append({
     "provider": pinfo["label"],
     "model": selected_model,
     "signal": _signal,
+    "report": {
+        "analyst_reports": analyst_reports,
+        "bull_argument": bull_argument,
+        "bear_argument": bear_argument,
+        "risk_report": risk_report,
+        "full_recommendation": full_recommendation,
+    },
 })
 # Keep at most 30 entries
 st.session_state.scan_history = st.session_state.scan_history[-30:]
