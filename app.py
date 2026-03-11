@@ -487,25 +487,66 @@ with dl_col2:
 
         import re as _re
 
-        def _md_to_para(text: str, style) -> list:
-            """Convert a line of markdown to a ReportLab Paragraph."""
-            # Bold: **text** → <b>text</b>
+        h3_style = ParagraphStyle("H3", parent=styles["Heading3"], fontSize=10, spaceBefore=8, spaceAfter=4)
+        bullet_style = ParagraphStyle("Bullet", parent=styles["Normal"], fontSize=9, leading=13,
+                                      leftIndent=12, spaceAfter=2)
+
+        def _clean(text: str) -> str:
+            """Convert inline markdown to ReportLab XML."""
+            # Bold+italic ***text*** or **text**
+            text = _re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text)
             text = _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-            # Strip leading markdown bullets/hashes
-            text = _re.sub(r'^#+\s*', '', text)
-            text = _re.sub(r'^[-•*]\s*', '• ', text)
-            text = text.strip()
-            if not text:
-                return []
-            try:
-                return [Paragraph(text, style)]
-            except Exception:
-                return [Paragraph(text.encode('ascii', 'replace').decode(), style)]
+            text = _re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
+            # Escape bare & and < that aren't already tags
+            text = _re.sub(r'&(?!amp;|lt;|gt;|#)', '&amp;', text)
+            return text
 
         def _add_section(heading: str, content: str):
             story.append(Paragraph(heading, h2_style))
             for line in content.split("\n"):
-                story.extend(_md_to_para(line, body_style))
+                raw = line.rstrip()
+                # Skip horizontal rules
+                if _re.match(r'^-{3,}$', raw) or _re.match(r'^\*{3,}$', raw):
+                    story.append(HRFlowable(width="100%", thickness=0.5,
+                                            color=colors.lightgrey, spaceAfter=4))
+                    continue
+                # H3 headers (###)
+                m = _re.match(r'^#{2,3}\s+(.*)', raw)
+                if m:
+                    story.append(Paragraph(_clean(m.group(1)), h3_style))
+                    continue
+                # H2 headers (##) already handled above, treat remaining # as h3
+                m = _re.match(r'^#\s+(.*)', raw)
+                if m:
+                    story.append(Paragraph(_clean(m.group(1)), h3_style))
+                    continue
+                # Table rows  | col | col | — render as indented text, skip separator rows
+                if raw.startswith("|"):
+                    if _re.match(r'^\|[\s\-|]+\|$', raw):
+                        continue  # skip |---|---| rows
+                    cells = [c.strip() for c in raw.strip("|").split("|")]
+                    cell_text = "  ·  ".join(_clean(c) for c in cells if c)
+                    if cell_text:
+                        try:
+                            story.append(Paragraph(cell_text, bullet_style))
+                        except Exception:
+                            pass
+                    continue
+                # Bullet lines
+                m = _re.match(r'^[-•*]\s+(.*)', raw)
+                if m:
+                    try:
+                        story.append(Paragraph("• " + _clean(m.group(1)), bullet_style))
+                    except Exception:
+                        pass
+                    continue
+                # Normal text
+                clean = _clean(raw).strip()
+                if clean:
+                    try:
+                        story.append(Paragraph(clean, body_style))
+                    except Exception:
+                        pass
             story.append(Spacer(1, 8))
 
         for name, report in analyst_reports.items():
@@ -534,19 +575,21 @@ with dl_col2:
 <html><head><meta charset="utf-8">
 <title>TradingAgents Report: {ticker_input}</title>
 <style>
-  body {{ font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }}
-  h1 {{ color: #0084ff; }} h2 {{ border-bottom: 1px solid #ccc; padding-bottom: 4px; }}
-  pre {{ white-space: pre-wrap; font-family: inherit; }}
+  body {{ font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height:1.6; }}
+  h1 {{ color: #0084ff; }} h2 {{ border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top:2rem; }}
+  h3 {{ color: #333; margin-top:1.2rem; }}
+  .md {{ white-space: pre-wrap; font-family: inherit; }}
+  strong {{ font-weight: 700; }}
 </style></head><body>
 <h1>TradingAgents Report: {ticker_input}</h1>
 <p><strong>Provider:</strong> {pinfo['label']} · <strong>Model:</strong> {selected_model}<br>
 <strong>Generated:</strong> {_dt.now().strftime('%Y-%m-%d %H:%M')}</p>
 <hr>
-{''.join(f"<h2>{name}</h2><pre>{report}</pre>" for name, report in analyst_reports.items())}
-<h2>Bull Case</h2><pre>{bull_argument}</pre>
-<h2>Bear Case</h2><pre>{bear_argument}</pre>
-<h2>Risk Assessment</h2><pre>{risk_report}</pre>
-<h2>Portfolio Manager Recommendation</h2><pre>{full_recommendation}</pre>
+{''.join(f"<h2>{name}</h2><div class='md'>{report}</div>" for name, report in analyst_reports.items())}
+<h2>Bull Case</h2><div class='md'>{bull_argument}</div>
+<h2>Bear Case</h2><div class='md'>{bear_argument}</div>
+<h2>Risk Assessment</h2><div class='md'>{risk_report}</div>
+<h2>Portfolio Manager Recommendation</h2><div class='md'>{full_recommendation}</div>
 <hr><p><em>AI-generated for educational purposes only. Not financial advice.</em></p>
 </body></html>"""
         st.download_button(
