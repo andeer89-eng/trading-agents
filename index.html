@@ -145,6 +145,8 @@
         .history-signal.na { background: rgba(128,128,128,.12); color: var(--muted); }
         .history-clear { float: right; font-size: .68rem; color: var(--muted); cursor: pointer; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; margin-top: -2px; }
         .history-clear:hover { color: var(--red); border-color: var(--red); }
+        .history-delete { background: none; border: 1px solid transparent; color: var(--muted); cursor: pointer; font-size: .75rem; padding: 2px 5px; border-radius: 4px; line-height: 1; flex-shrink: 0; }
+        .history-delete:hover { color: var(--red); border-color: var(--red); background: rgba(255,75,75,.08); }
 
         /* ── Provider config panel ── */
         .cfg-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
@@ -1077,6 +1079,13 @@ function clearHistory() {
     if (confirm('Clear all scan history?')) { localStorage.removeItem(HISTORY_KEY); renderHistory(); }
 }
 
+function deleteHistoryEntry(index) {
+    const arr = loadHistory();
+    arr.splice(index, 1);
+    saveHistory(arr);
+    renderHistory();
+}
+
 function renderHistory() {
     const arr = loadHistory();
     const panel = document.getElementById('history-panel');
@@ -1087,13 +1096,15 @@ function renderHistory() {
     panel.style.display = 'block';
     count.textContent = `(${arr.length})`;
 
-    const items = arr.slice().reverse().map(e => {
+    const items = arr.slice().reverse().map((e, i) => {
         const sig = (e.signal || '').toUpperCase();
         const cls = sig==='BUY'?'buy':sig==='SELL'?'sell':sig==='HOLD'?'hold':'na';
+        const realIndex = arr.length - 1 - i;
         return `<div class="history-entry" onclick="document.getElementById('ticker').value='${e.ticker}'; document.getElementById('analyze-btn').scrollIntoView({behavior:'smooth'})">
             <span class="history-ticker">${e.ticker}</span>
             <span class="history-meta">${e.ts}<br>${e.provider} · ${e.model}</span>
             <span class="history-signal ${cls}">${sig||'—'}</span>
+            <button class="history-delete" onclick="event.stopPropagation(); deleteHistoryEntry(${realIndex})" title="Remove">✕</button>
         </div>`;
     }).join('');
 
